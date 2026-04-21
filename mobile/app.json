@@ -1,0 +1,42 @@
+{
+  "expo": {
+    "name": "Translate",
+    "slug": "translate",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "automatic",
+    "scheme": "translate",
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.manhvu1212.translate",
+      "infoPlist": {
+        "NSCameraUsageDescription": "Used to capture images for translation.",
+        "NSMicrophoneUsageDescription": "Used to record audio for translation.",
+        "NSPhotoLibraryUsageDescription": "Used to pick images for translation."
+      }
+    },
+    "android": {
+      "package": "com.manhvu1212.translate",
+      "permissions": ["CAMERA", "RECORD_AUDIO", "READ_EXTERNAL_STORAGE"]
+    },
+    "web": { "bundler": "metro" },
+    "plugins": [
+      "expo-router",
+      [
+        "expo-camera",
+        { "cameraPermission": "Allow Translate to access your camera." }
+      ],
+      [
+        "expo-av",
+        { "microphonePermission": "Allow Translate to access your microphone." }
+      ],
+      [
+        "expo-image-picker",
+        { "photosPermission": "Allow Translate to access your photos." }
+      ]
+    ],
+    "extra": {
+      "apiUrl": "http://localhost:8000"
+    }
+  }
+}
