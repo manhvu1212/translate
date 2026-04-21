@@ -1,5 +1,4 @@
 import * as ImagePicker from "expo-image-picker";
-import * as FileSystem from "expo-file-system";
 import { useState } from "react";
 import {
   ActivityIndicator,
@@ -10,7 +9,7 @@ import {
   Text,
   View,
 } from "react-native";
-import { api } from "../src/api";
+import { ocrFromUri } from "../src/api";
 import { LanguagePicker } from "../src/LanguagePicker";
 import { useLanguages } from "../src/LanguagesContext";
 
@@ -43,11 +42,7 @@ export default function OcrScreen() {
     setExtracted("");
     setTranslated("");
     try {
-      const b64 = await FileSystem.readAsStringAsync(uri, {
-        encoding: FileSystem.EncodingType.Base64,
-      });
-      const blob = base64ToBlob(b64, mimeType);
-      const r = await api.ocr(blob, target);
+      const r = await ocrFromUri(uri, mimeType, target);
       setExtracted(r.extracted);
       setTranslated(r.translated);
     } catch (e) {
@@ -87,13 +82,6 @@ export default function OcrScreen() {
       </View>
     </ScrollView>
   );
-}
-
-function base64ToBlob(b64: string, mimeType: string): Blob {
-  const binary = atob(b64);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-  return new Blob([bytes], { type: mimeType });
 }
 
 const styles = StyleSheet.create({

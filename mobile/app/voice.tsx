@@ -1,5 +1,4 @@
 import { Audio } from "expo-av";
-import * as FileSystem from "expo-file-system";
 import { useRef, useState } from "react";
 import {
   ActivityIndicator,
@@ -9,7 +8,7 @@ import {
   Text,
   View,
 } from "react-native";
-import { api } from "../src/api";
+import { sttFromUri } from "../src/api";
 import { LanguagePicker } from "../src/LanguagePicker";
 import { useLanguages } from "../src/LanguagesContext";
 
@@ -57,15 +56,7 @@ export default function VoiceScreen() {
     setTranscript("");
     setTranslated("");
     try {
-      const b64 = await FileSystem.readAsStringAsync(uri, {
-        encoding: FileSystem.EncodingType.Base64,
-      });
-      const mime = uri.endsWith(".m4a") ? "audio/m4a" : "audio/mp4";
-      const binary = atob(b64);
-      const bytes = new Uint8Array(binary.length);
-      for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-      const blob = new Blob([bytes], { type: mime });
-      const r = await api.stt(blob, { language: source, target, filename: "recording.m4a" });
+      const r = await sttFromUri(uri, { language: source, target });
       setTranscript(r.text);
       setTranslated(r.translated ?? "");
     } catch (e) {
