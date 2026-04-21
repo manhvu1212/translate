@@ -38,17 +38,21 @@ def _ocr_prompt(target: str) -> str:
 
 
 class GemmaProvider(LLMProvider):
-    def __init__(self, host: str, text_model: str, vision_model: str):
+    def __init__(self, host: str, text_model: str, vision_model: str, num_ctx: int):
         self.host = host.rstrip("/")
         self.text_model = text_model
         self.vision_model = vision_model
+        self.num_ctx = num_ctx
+
+    def _opts(self, temperature: float) -> dict:
+        return {"temperature": temperature, "num_ctx": self.num_ctx}
 
     async def translate(self, text: str, source: str, target: str) -> str:
         payload = {
             "model": self.text_model,
             "prompt": _translate_prompt(text, source, target),
             "stream": False,
-            "options": {"temperature": 0.2},
+            "options": self._opts(0.2),
         }
         async with httpx.AsyncClient(timeout=120) as client:
             r = await client.post(f"{self.host}/api/generate", json=payload)
@@ -62,7 +66,7 @@ class GemmaProvider(LLMProvider):
             "model": self.text_model,
             "prompt": _translate_prompt(text, source, target),
             "stream": True,
-            "options": {"temperature": 0.2},
+            "options": self._opts(0.2),
         }
         async with httpx.AsyncClient(timeout=None) as client:
             async with client.stream("POST", f"{self.host}/api/generate", json=payload) as r:
@@ -87,7 +91,7 @@ class GemmaProvider(LLMProvider):
             "prompt": _ocr_prompt(target),
             "images": [b64],
             "stream": False,
-            "options": {"temperature": 0.1},
+            "options": self._opts(0.1),
         }
         async with httpx.AsyncClient(timeout=180) as client:
             r = await client.post(f"{self.host}/api/generate", json=payload)

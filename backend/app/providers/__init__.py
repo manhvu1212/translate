@@ -12,5 +12,6 @@ def get_provider() -> LLMProvider:
             host=settings.ollama_host,
             text_model=settings.gemma_model,
             vision_model=settings.gemma_vision_model,
+            num_ctx=settings.gemma_num_ctx,
         )
     return _provider

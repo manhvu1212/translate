@@ -17,5 +17,6 @@ def health():
         "status": "ok",
         "text_model": settings.gemma_model,
         "vision_model": settings.gemma_vision_model,
+        "num_ctx": settings.gemma_num_ctx,
         "whisper_model": settings.whisper_model,
     }
