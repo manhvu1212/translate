@@ -22,7 +22,7 @@ if errorlevel 1 (
 )
 
 echo [4/4] Checking GPU...
-python -c "from faster_whisper import WhisperModel; WhisperModel('base', device='cuda', compute_type='float16'); print('GPU OK')" 2>nul
+python -c "import ctranslate2; count=ctranslate2.get_cuda_device_count(); exit(0 if count > 0 else 1)" 2>nul
 if errorlevel 1 (
     echo WARNING: GPU not available, will use CPU.
     echo Set WHISPER_DEVICE=cpu in .env if not already set.
