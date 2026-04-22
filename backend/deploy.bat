@@ -9,7 +9,7 @@ if errorlevel 1 (echo ERROR: python not found & exit /b 1)
 
 echo [2/4] Installing dependencies...
 call "%BACKEND_DIR%.venv\Scripts\activate.bat"
-pip install --no-cache-dir -e "%BACKEND_DIR%"
+pip install --no-cache-dir -e "%BACKEND_DIR:~0,-1%"
 if errorlevel 1 (echo ERROR: pip install failed & exit /b 1)
 
 echo [3/4] Checking ffmpeg...
