@@ -30,6 +30,20 @@ if errorlevel 1 (
     echo GPU OK - set WHISPER_DEVICE=cuda in .env to enable
 )
 
+echo [5/5] Checking Ollama + gemma4:e4b...
+where ollama >nul 2>&1
+if errorlevel 1 (
+    echo WARNING: ollama not found. Translation will fail.
+    echo Install from: https://ollama.com/download
+) else (
+    ollama list 2>nul | findstr /i "gemma4:e4b" >nul
+    if errorlevel 1 (
+        echo WARNING: model gemma4:e4b not found. Run: ollama pull gemma4:e4b
+    ) else (
+        echo Ollama + gemma4:e4b OK
+    )
+)
+
 echo.
 echo Deploy done. Run: run.bat
 endlocal
