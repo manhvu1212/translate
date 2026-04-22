@@ -3,7 +3,16 @@ setlocal
 
 set BACKEND_DIR=%~dp0
 set TUNNEL_NAME=translate-backend
-set CREDENTIALS=%USERPROFILE%\.cloudflared\%TUNNEL_NAME%.json
+
+:: Lookup tunnel UUID dynamically from tunnel name
+for /f "tokens=1" %%i in ('cloudflared tunnel list --output=json 2^>nul ^| python -c "import sys,json;data=json.load(sys.stdin);[print(t[\"id\"]) for t in data if t[\"name\"]==\"%TUNNEL_NAME%\"]"') do set TUNNEL_UUID=%%i
+
+if not defined TUNNEL_UUID (
+    echo ERROR: Could not find tunnel "%TUNNEL_NAME%". Run: cloudflared tunnel create %TUNNEL_NAME%
+    exit /b 1
+)
+
+set CREDENTIALS=%USERPROFILE%\.cloudflared\%TUNNEL_UUID%.json
 
 if not exist "%BACKEND_DIR%.venv" (
     echo ERROR: .venv not found. Run deploy.bat first.
@@ -43,6 +52,6 @@ python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/
 if errorlevel 1 goto wait
 
 echo Starting Cloudflare Named Tunnel [api.nguyenmanhvu.name.vn] ...
-cloudflared tunnel --config "%BACKEND_DIR%cloudflared-config.yml" run
+cloudflared tunnel --config "%BACKEND_DIR%cloudflared-config.yml" --credentials-file "%CREDENTIALS%" run %TUNNEL_NAME%
 
 endlocal
