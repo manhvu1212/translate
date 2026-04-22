@@ -31,14 +31,13 @@ if errorlevel 1 (
 )
 
 echo [5/5] Checking Ollama + gemma4:e4b...
-where ollama >nul 2>&1
+curl -s -o nul -w "%%{http_code}" http://localhost:11434 2>nul | findstr /i "200" >nul
 if errorlevel 1 (
-    echo WARNING: ollama not found. Translation will fail.
-    echo Install from: https://ollama.com/download
+    echo WARNING: Ollama not running at http://localhost:11434. Start Ollama first.
 ) else (
-    ollama list 2>nul | findstr /i "gemma4:e4b" >nul
+    curl -s -X POST http://localhost:11434/api/generate -H "Content-Type: application/json" -d "{\"model\":\"gemma4:e4b\",\"prompt\":\"hi\",\"stream\":false}" 2>nul | python -c "import sys,json; d=json.load(sys.stdin); exit(0 if d.get('response') else 1)" 2>nul
     if errorlevel 1 (
-        echo WARNING: model gemma4:e4b not found. Run: ollama pull gemma4:e4b
+        echo WARNING: gemma4:e4b did not respond. Run: ollama pull gemma4:e4b
     ) else (
         echo Ollama + gemma4:e4b OK
     )
