@@ -1,5 +1,4 @@
 tunnel: translate-backend
-credentials-file: ${USERPROFILE}\.cloudflared\translate-backend.json
 
 ingress:
   - hostname: api.nguyenmanhvu.name.vn
