@@ -25,14 +25,4 @@ ping -n 2 127.0.0.1 >nul
 python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')" >nul 2>&1
 if errorlevel 1 goto wait
 
-:: Start Cloudflare Tunnel
-where cloudflared >nul 2>&1
-if errorlevel 1 (
-    echo WARNING: cloudflared not found. Skipping tunnel.
-    echo Install from: https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/
-) else (
-    echo Starting Cloudflare Tunnel...
-    cloudflared tunnel --url http://localhost:8000
-)
-
 endlocal

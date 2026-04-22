@@ -2,10 +2,13 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
+from app.middleware.auth import AuthMiddleware
 from app.routers import meta, ocr, stt, translate
 
 app = FastAPI(title="Translate API", version="0.1.0")
 
+# AuthMiddleware runs first (outermost), CORS runs inside
+app.add_middleware(AuthMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins_list,

@@ -1,0 +1,17 @@
+# Environment — never commit real keys
+.env
+.env.production
+.env.local
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+
+# Cloudflare tunnel credentials
+*.json
+
+# OS
+.DS_Store
+Thumbs.db

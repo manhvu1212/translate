@@ -1,0 +1,7 @@
+tunnel: translate-backend
+credentials-file: ${USERPROFILE}\.cloudflared\translate-backend.json
+
+ingress:
+  - hostname: api.nguyenmanhvu.name.vn
+    service: http://localhost:8000
+  - service: http_status:404

@@ -15,6 +15,12 @@ class Settings(BaseSettings):
 
     cors_origins: str = "http://localhost:3000,http://localhost:8081,http://localhost:19006"
 
+    # Leave empty to disable API key auth (dev mode)
+    api_key: str = ""
+
+    # Comma-separated Cloudflare Access team domain (optional, e.g. "myteam.cloudflareaccess.com")
+    cf_access_team_domain: str = ""
+
     @property
     def cors_origins_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
