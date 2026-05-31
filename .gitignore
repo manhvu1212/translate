@@ -1,51 +1,8 @@
-# deps
-node_modules/
-.pnpm-store/
-
-# python
-__pycache__/
-*.pyc
-.venv/
-venv/
-.env
-.env.production
-*.egg-info/
-
-# builds
-dist/
-build/
-.next/
-out/
-.expo/
-.expo-shared/
-*.tsbuildinfo
-
-# env
-.env.local
-.env.*.local
-
-# OS / editor
-.DS_Store
-Thumbs.db
-.vscode/
-.idea/
-
-# logs
-*.log
-npm-debug.log*
-yarn-debug.log*
-pnpm-debug.log*
-
-# uploads
-backend/uploads/
-backend/data/
-
-# claude
-.claude/settings.local.json
-
-# C# WPF build outputs and config
+# WPF build outputs
 bin/
 obj/
+
+# User configurations & IDE cache
 .vs/
 *.user
 *.suo
