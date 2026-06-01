@@ -1,9 +1,11 @@
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 
 namespace AITranslator
@@ -19,10 +21,16 @@ namespace AITranslator
     {
         private static readonly HttpClient client = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
 
-        // Caches successful translations so re-triggering the same selection
-        // (e.g. after the popup was accidentally dismissed) is instant and free.
-        // Keyed by provider + model + target language + source text.
+        // Caches successful translations AND rewrites so re-triggering the same
+        // selection (e.g. after the popup was accidentally dismissed, or switching
+        // tone/target back and forth) is instant and free.
+        // Translation keys:  {provider}|{model}|{targetLanguage}|{text}
+        // Rewrite keys:      Rewrite|{provider}|{model}|{tone}|{text}
         private static readonly ConcurrentDictionary<string, string> _translationCache = new();
+
+        // Tracks insertion order so we can evict the oldest entries one-by-one
+        // instead of wiping the whole cache when the bound is reached.
+        private static readonly ConcurrentQueue<string> _cacheKeyOrder = new();
         private const int MaxCacheEntries = 300;
 
         public async Task<TranslationResult> TranslateAsync(string text, AppSettings settings)
@@ -46,19 +54,22 @@ namespace AITranslator
             string cacheKey = $"{provider}|{model}|{targetLanguage}|{text}";
             if (_translationCache.TryGetValue(cacheKey, out string? cached))
             {
-                return ParseTranslationResult(cached, targetLanguage);
+                return ParseTranslationResult(cached, targetLanguage, text);
             }
 
             // System prompt for high-quality, direct translations
             string fallbackLanguage = targetLanguage.Equals("English", StringComparison.OrdinalIgnoreCase) ? "Vietnamese" : "English";
-            string prompt = $"You are a professional translator.\n\n" +
+            string prompt = $"You are a professional translation ENGINE, not a chatbot. You output only structured translation data and never converse.\n\n" +
                             $"Directives:\n" +
                             $"- Translate the input text to {targetLanguage}.\n" +
-                            $"- Exception: If the input text is already in {targetLanguage} (linguistically and grammatically), translate it to {fallbackLanguage} instead. " +
-                            $"Do NOT trigger this exception for different languages that happen to share characters (for example, Chinese text is NOT Japanese and is NOT Korean; do not treat Chinese Hanzi as Japanese Kanji or Korean Hanja).\n" +
-                            $"- On the VERY FIRST line of your response, output a language metadata tag in this exact format: [DETECTED_SOURCE_LANGUAGE->ACTUAL_TARGET_LANGUAGE]\n" +
-                            $"  Use one of these exact values for both languages: Vietnamese, English, Japanese, Korean, Chinese.\n" +
-                            $"- Starting from the second line, output ONLY the translation, without any introduction, explanations, quotes, markdown wrappers, or extra notes.\n" +
+                            $"- Exception: if the input is ALREADY written in {targetLanguage}, translate it to {fallbackLanguage} instead. Apply this SILENTLY — perform the translation and reflect it in the tag; never mention, explain, or justify it.\n" +
+                            $"  Do NOT trigger this exception for different languages that merely share characters (Chinese is NOT Japanese and NOT Korean; do not treat Chinese Hanzi as Japanese Kanji or Korean Hanja).\n" +
+                            $"- Line 1 MUST be ONLY this metadata tag and nothing else: [SourceLanguage->TargetLanguage]\n" +
+                            $"  Put the languages you actually translated FROM and TO, each one of: Vietnamese, English, Japanese, Korean, Chinese, joined by the two-character ASCII arrow ->. Example: [Vietnamese->English]\n" +
+                            $"  No bold, quotes, code block, or any character before the opening '['.\n" +
+                            $"- Line 2 onward MUST be ONLY the translated text.\n" +
+                            $"- ABSOLUTELY NO commentary, reasoning, preamble, greetings, or sentences describing what you are doing. For example, you must NEVER write things like \"This text is already Vietnamese, so I will translate it to English:\" — such narration is strictly forbidden.\n" +
+                            $"- Do NOT repeat, echo, or append the original source text. Output the translated text only, never the source.\n" +
                             $"- Keep formatting, line breaks, and punctuation identical to the source.\n\n" +
                             $"Text to translate:\n{text}";
 
@@ -85,32 +96,131 @@ namespace AITranslator
                 CacheTranslation(cacheKey, result);
             }
 
-            return ParseTranslationResult(result, targetLanguage);
+            return ParseTranslationResult(result, targetLanguage, text);
         }
 
-        private static TranslationResult ParseTranslationResult(string rawResult, string requestedTargetLang)
+        // Accepts the canonical names plus the casing/short-code/native variants that
+        // different providers (OpenAI, Claude, Groq, Gemini) tend to emit.
+        private static readonly Dictionary<string, string> LanguageAliases = new(StringComparer.OrdinalIgnoreCase)
+        {
+            ["vietnamese"] = "Vietnamese", ["vi"] = "Vietnamese", ["vie"] = "Vietnamese", ["vietnam"] = "Vietnamese", ["tiếng việt"] = "Vietnamese", ["tieng viet"] = "Vietnamese",
+            ["english"] = "English", ["en"] = "English", ["eng"] = "English",
+            ["japanese"] = "Japanese", ["ja"] = "Japanese", ["jp"] = "Japanese", ["jpn"] = "Japanese", ["日本語"] = "Japanese",
+            ["korean"] = "Korean", ["ko"] = "Korean", ["kor"] = "Korean", ["한국어"] = "Korean",
+            ["chinese"] = "Chinese", ["zh"] = "Chinese", ["zho"] = "Chinese", ["chi"] = "Chinese", ["mandarin"] = "Chinese", ["中文"] = "Chinese",
+        };
+
+        // Arrow variants different models emit between the two languages: -> --> → ⇒ => › »
+        private const string ArrowAlternation = @"(?:→|⇒|=>|-+>|›|»|>)";
+
+        // Leading junk some models prepend before the tag: an optional code fence
+        // (```), an optional language hint after it, and any markdown/quote characters.
+        private const string LeadingJunk = @"(?:`{3,}[A-Za-z]*)?[\s`*>""'~_]*";
+
+        // Tier 1: a bracketed tag at the very start, tolerant of leading markdown/quotes.
+        private static readonly Regex BracketTagRegex = new(
+            @"^" + LeadingJunk + @"\[\s*([^\]\r\n]+?)\s*" + ArrowAlternation + @"\s*([^\]\r\n]+?)\s*\]",
+            RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
+        // Tier 2 (fallback): a bracket-less tag occupying the entire first line.
+        private static readonly Regex BareTagRegex = new(
+            @"^" + LeadingJunk + @"([A-Za-z][A-Za-z ]*?)\s*" + ArrowAlternation + @"\s*([A-Za-z][A-Za-z ]*?)\s*$",
+            RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
+        private static TranslationResult ParseTranslationResult(string rawResult, string requestedTargetLang, string sourceText)
         {
             var tr = new TranslationResult { Text = rawResult, ActualTargetLang = requestedTargetLang };
 
-            // Try to parse [SOURCE->TARGET] prefix on the first line
-            if (rawResult.StartsWith("[") && rawResult.Contains("->")
-                && !rawResult.StartsWith("Lỗi"))
+            if (string.IsNullOrEmpty(rawResult) || rawResult.StartsWith("Lỗi"))
+                return tr;
+
+            // Tier 1: [Source->Target] at the start (handles markdown wrappers and arrow variants).
+            var m = BracketTagRegex.Match(rawResult);
+            if (m.Success)
             {
-                int closeBracket = rawResult.IndexOf(']');
-                if (closeBracket > 0)
+                tr.DetectedSourceLang = NormalizeLanguage(m.Groups[1].Value) ?? "";
+                tr.ActualTargetLang = NormalizeLanguage(m.Groups[2].Value) ?? requestedTargetLang;
+                tr.Text = CleanBody(rawResult.Substring(m.Index + m.Length));
+            }
+            else
+            {
+                // Tier 2: bracket-less tag as the whole first line (e.g. "English -> Vietnamese").
+                // Only accepted when BOTH sides are recognized languages, so real content is never stripped.
+                int firstBreak = rawResult.IndexOfAny(new[] { '\r', '\n' });
+                string firstLine = firstBreak >= 0 ? rawResult.Substring(0, firstBreak) : rawResult;
+                var b = BareTagRegex.Match(firstLine);
+                if (b.Success)
                 {
-                    string tag = rawResult.Substring(1, closeBracket - 1);
-                    string[] parts = tag.Split("->");
-                    if (parts.Length == 2)
+                    string? src = NormalizeLanguage(b.Groups[1].Value);
+                    string? tgt = NormalizeLanguage(b.Groups[2].Value);
+                    if (src != null && tgt != null)
                     {
-                        tr.DetectedSourceLang = parts[0].Trim();
-                        tr.ActualTargetLang = parts[1].Trim();
-                        tr.Text = rawResult.Substring(closeBracket + 1).TrimStart('\r', '\n', ' ');
+                        tr.DetectedSourceLang = src;
+                        tr.ActualTargetLang = tgt;
+                        tr.Text = firstBreak >= 0 ? CleanBody(rawResult.Substring(firstBreak)) : "";
                     }
                 }
             }
 
+            tr.Text = StripEchoedSource(tr.Text, sourceText);
             return tr;
+        }
+
+        /// <summary>
+        /// Some weaker models (notably Groq's llama-3.1-8b-instant) echo the original
+        /// source text before or after the translation despite instructions. When the
+        /// source appears verbatim at the start or end of the result, strip it — but only
+        /// if real translated content remains, so short untranslatable inputs aren't wiped.
+        /// </summary>
+        private static string StripEchoedSource(string body, string sourceText)
+        {
+            if (string.IsNullOrEmpty(body) || string.IsNullOrWhiteSpace(sourceText))
+                return body;
+
+            string src = sourceText.Trim();
+            string trimmed = body.Trim();
+            if (src.Length == 0 || trimmed.Length <= src.Length)
+                return body;
+
+            string? candidate = null;
+            if (trimmed.EndsWith(src, StringComparison.Ordinal))
+                candidate = trimmed.Substring(0, trimmed.Length - src.Length).Trim();
+            else if (trimmed.StartsWith(src, StringComparison.Ordinal))
+                candidate = trimmed.Substring(src.Length).Trim();
+
+            return string.IsNullOrEmpty(candidate) ? body : candidate;
+        }
+
+        /// <summary>
+        /// Maps a model-provided language string to one of the five canonical names
+        /// (Vietnamese, English, Japanese, Korean, Chinese) the UI relies on, tolerating
+        /// casing, short codes, native names, and parenthetical variants like "Chinese (Simplified)".
+        /// Returns null when the value is unrecognized.
+        /// </summary>
+        private static string? NormalizeLanguage(string raw)
+        {
+            if (string.IsNullOrWhiteSpace(raw)) return null;
+            string s = raw.Trim().Trim('*', '`', '"', '\'', ' ');
+
+            if (LanguageAliases.TryGetValue(s, out string? canonical))
+                return canonical;
+
+            // Handle values like "Chinese (Simplified)" or "English (US)".
+            int paren = s.IndexOf('(');
+            if (paren > 0 && LanguageAliases.TryGetValue(s.Substring(0, paren).Trim(), out canonical))
+                return canonical;
+
+            return null;
+        }
+
+        // Strips leading newlines/spaces/markdown fences left after removing the tag,
+        // plus a trailing code fence if the model wrapped the whole response in one.
+        private static string CleanBody(string s)
+        {
+            s = s.TrimStart('\r', '\n', ' ', '\t', '`', '*', '_').TrimEnd();
+            if (s.EndsWith("```"))
+                s = s.Substring(0, s.Length - 3).TrimEnd();
+            return s;
         }
 
         public async Task<string> RewriteAsync(string text, string tone, AppSettings settings)
@@ -181,12 +291,24 @@ namespace AITranslator
 
         private static void CacheTranslation(string key, string value)
         {
-            // Crude bound so a long-running tray session doesn't grow unbounded.
-            if (_translationCache.Count >= MaxCacheEntries)
+            // Only track insertion order for brand-new keys; updating an existing
+            // key keeps its original position (good enough for a best-effort cache).
+            if (_translationCache.TryAdd(key, value))
             {
-                _translationCache.Clear();
+                _cacheKeyOrder.Enqueue(key);
             }
-            _translationCache[key] = value;
+            else
+            {
+                _translationCache[key] = value;
+            }
+
+            // Bound the cache for long-running tray sessions by evicting the oldest
+            // entries one at a time, so most previously cached translations and
+            // rewrites survive instead of being wiped all at once.
+            while (_translationCache.Count > MaxCacheEntries && _cacheKeyOrder.TryDequeue(out string? oldestKey))
+            {
+                _translationCache.TryRemove(oldestKey, out _);
+            }
         }
 
         private async Task<string> TranslateWithGeminiAsync(string prompt, string model, string apiKey)

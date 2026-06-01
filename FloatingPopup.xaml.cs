@@ -384,17 +384,18 @@ namespace AITranslator
                     // 2. Translate rewritten text (Sentence 3) to TxtRewriteTranslated (Sentence 4)
                     TxtRewriteTranslated.Text = LocalizationManager.Get("Translating", lang);
                     string originalTargetLang = _settings.TargetLanguage;
-                    string translateResult;
+                    TranslationResult translateRes;
                     try
                     {
                         _settings.TargetLanguage = _rewriteTargetLanguage;
-                        var translateRes = await _aiService.TranslateAsync(rewrittenText, _settings);
-                        translateResult = translateRes.Text;
+                        translateRes = await _aiService.TranslateAsync(rewrittenText, _settings);
                     }
                     finally
                     {
                         _settings.TargetLanguage = originalTargetLang;
                     }
+                    SyncRewriteTargetLanguageFromResult(translateRes);
+                    string translateResult = translateRes.Text;
                     TxtRewriteTranslated.Text = translateResult;
 
                     if (translateResult.StartsWith("Lỗi") || translateResult.Contains("System error"))
@@ -900,6 +901,27 @@ namespace AITranslator
             _settings.Save();
 
             // Refresh all UI elements to match the new target language
+            LocalizeUI();
+            UpdatePillHighlights();
+            UpdateStatusLabel();
+        }
+
+        /// <summary>
+        /// After receiving a TranslationResult for the rewrite-translation step
+        /// (RewriteAndTranslate mode), if the AI translated to a different language
+        /// than requested (e.g., the rewritten text was already English so it was
+        /// translated to Vietnamese instead), update the rewrite target language and
+        /// refresh the UI so the header and rewrite-language pill reflect the actual target.
+        /// </summary>
+        private void SyncRewriteTargetLanguageFromResult(TranslationResult result)
+        {
+            if (string.IsNullOrEmpty(result.ActualTargetLang)) return;
+            if (result.ActualTargetLang.Equals(_rewriteTargetLanguage, StringComparison.OrdinalIgnoreCase)) return;
+
+            _rewriteTargetLanguage = result.ActualTargetLang;
+
+            // Refresh UI elements that depend on the rewrite target language
+            // (rewrite-translated header + rewrite-language pill highlight).
             LocalizeUI();
             UpdatePillHighlights();
             UpdateStatusLabel();
