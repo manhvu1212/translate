@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
@@ -33,6 +34,12 @@ namespace AITranslator
             _rewriteTargetLanguage = _settings.TargetLanguage;
 
             _currentMode = startInRewriteMode ? PopupMode.Rewrite : PopupMode.Translate;
+
+            // Auto-detect source language and swap target if needed (only in Translate mode)
+            if (_currentMode == PopupMode.Translate)
+            {
+                AdjustTargetLanguageIfNeeded();
+            }
 
             TxtOriginal.Text = _originalText;
             
@@ -84,6 +91,15 @@ namespace AITranslator
 
                 e.Handled = true; // Prevent Enter from inserting newline
                 _originalText = TxtOriginal.Text;
+
+                // Auto-detect and swap language if needed (for Translate modes)
+                if (_currentMode == PopupMode.Translate || _currentMode == PopupMode.TranslateAndRewrite)
+                {
+                    AdjustTargetLanguageIfNeeded();
+                    LocalizeUI();
+                    UpdatePillHighlights();
+                    UpdateStatusLabel();
+                }
 
                 string lang = _settings.TargetLanguage;
                 if (_currentMode == PopupMode.TranslateAndRewrite)
@@ -877,6 +893,56 @@ namespace AITranslator
                 {
                     activePill.Background = activeBg;
                     activePill.Foreground = activeFg;
+                }
+            }
+        }
+
+        // --- Language Detection Helpers ---
+
+        private static readonly string VietnameseAccents =
+            "àáảãạăắằẳẵặâấầẩẫậèéẻẽẹêếềểễệìíỉĩịòóỏõọôốồổỗộơớờởỡợùúủũụưứừửữựỳýỷỹỵđ" +
+            "ÀÁẢÃẠĂẮẰẲẴẶÂẤẦẨẪẬÈÉẺẼẸÊẾỀỂỄỆÌÍỈĨỊÒÓỎÕỌÔỐỒỔỖỘƠỚỜỞỠỢÙÚỦŨỤƯỨỪỬỮỰỲÝỶỸỴĐ";
+
+        private static bool ContainsVietnameseAccents(string text)
+        {
+            return text.Any(c => VietnameseAccents.Contains(c));
+        }
+
+        private static bool ContainsCjk(string text)
+        {
+            return text.Any(c =>
+                (c >= '\u4E00' && c <= '\u9FFF') ||   // CJK Unified Ideographs (Chinese / Kanji)
+                (c >= '\u3040' && c <= '\u309F') ||   // Hiragana (Japanese)
+                (c >= '\u30A0' && c <= '\u30FF') ||   // Katakana (Japanese)
+                (c >= '\uAC00' && c <= '\uD7AF'));    // Hangul Syllables (Korean)
+        }
+
+        /// <summary>
+        /// Detects whether the original text is Vietnamese or English and swaps
+        /// the target language to avoid same-language translation.
+        /// Only swaps between Vietnamese ↔ English; other languages are left untouched.
+        /// </summary>
+        private void AdjustTargetLanguageIfNeeded()
+        {
+            string target = _settings.TargetLanguage;
+
+            if (ContainsVietnameseAccents(_originalText))
+            {
+                // Source is Vietnamese – if target is also Vietnamese, swap to English
+                if (target.Equals("Vietnamese", StringComparison.OrdinalIgnoreCase))
+                {
+                    _settings.TargetLanguage = "English";
+                    _settings.Save();
+                }
+            }
+            else if (!ContainsCjk(_originalText))
+            {
+                // Source is likely English (Latin script, no Vietnamese accents, no CJK)
+                // If target is also English, swap to Vietnamese
+                if (target.Equals("English", StringComparison.OrdinalIgnoreCase))
+                {
+                    _settings.TargetLanguage = "Vietnamese";
+                    _settings.Save();
                 }
             }
         }
