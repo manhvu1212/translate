@@ -15,11 +15,7 @@ namespace AITranslator
         private readonly AIService _aiService;
         private bool _isClosing = false;
         private System.Drawing.Point? _initialMousePosition;
-
-        // Auto-close on lost focus is disabled while translating, and during a
-        // reading grace period after a result arrives. Manual close is unaffected.
-        private bool _allowAutoClose = false;
-        private System.Windows.Threading.DispatcherTimer? _autoCloseTimer;
+        private bool _userMoved = false;
 
         public event Action? SettingsRequested;
 
@@ -40,7 +36,7 @@ namespace AITranslator
             // Highlight target language pill
             HighlightActiveLanguagePill();
 
-            // Esc closes the popup, regardless of the auto-close grace period.
+            // Esc closes the popup.
             this.PreviewKeyDown += FloatingPopup_PreviewKeyDown;
         }
 
@@ -53,12 +49,25 @@ namespace AITranslator
             }
         }
 
+        // Drag the borderless window by its header. Once the user moves it, we stop
+        // auto-repositioning so the window stays where they put it.
+        private void Header_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+        {
+            if (e.LeftButton == MouseButtonState.Pressed)
+            {
+                _userMoved = true;
+                try { DragMove(); }
+                catch (InvalidOperationException) { /* DragMove can throw if the button was already released */ }
+            }
+        }
+
         private string GetActiveModelName()
         {
             return _settings.SelectedProvider switch
             {
                 "OpenAI" => _settings.OpenAIModel,
                 "Claude" => _settings.ClaudeModel,
+                "Groq" => _settings.GroqModel,
                 _ => _settings.GeminiModel
             };
         }
@@ -76,6 +85,10 @@ namespace AITranslator
 
         private void PositionPopupNearCursor()
         {
+            // Respect a manual drag: once the user has moved the window, never
+            // auto-reposition it back near the cursor.
+            if (_userMoved) return;
+
             // Get mouse position in screen coordinates and lock it
             if (_initialMousePosition == null)
             {
@@ -143,10 +156,6 @@ namespace AITranslator
         {
             BtnRetry.Visibility = Visibility.Collapsed;
 
-            // A new translation is starting (initial, retry, or language switch):
-            // block auto-close until it finishes and the reading grace elapses.
-            CancelAutoClose();
-
             try
             {
                 string result = await _aiService.TranslateAsync(_originalText, _settings);
@@ -156,14 +165,11 @@ namespace AITranslator
                 {
                     SetStatusColor(Brushes.Red); // Red dot for error
                     BtnRetry.Visibility = Visibility.Visible;
-                    // Keep the popup open on error so the user can read it or retry.
                 }
                 else
                 {
                     SetStatusColor(Brushes.LimeGreen); // Green dot for success
                     BtnRetry.Visibility = Visibility.Collapsed;
-                    // Allow auto-close only after a reading grace period sized to the text.
-                    ScheduleAutoClose(result);
                 }
             }
             catch (Exception ex)
@@ -223,52 +229,10 @@ namespace AITranslator
             CloseWithFade();
         }
 
-        private void Window_Deactivated(object sender, EventArgs e)
-        {
-            // Only auto-hide once translating has finished AND the reading grace
-            // period has elapsed. Until then, keep the popup open on lost focus.
-            if (!_allowAutoClose) return;
-            CloseWithFade();
-        }
-
-        private void CancelAutoClose()
-        {
-            _allowAutoClose = false;
-            _autoCloseTimer?.Stop();
-        }
-
-        private void ScheduleAutoClose(string translatedText)
-        {
-            _autoCloseTimer?.Stop();
-
-            // Reading grace: a base time plus extra per character, clamped so it
-            // never feels too snappy nor lingers excessively.
-            int length = translatedText?.Length ?? 0;
-            double ms = Math.Clamp(1500 + length * 35.0, 2000, 12000);
-
-            _autoCloseTimer = new System.Windows.Threading.DispatcherTimer
-            {
-                Interval = TimeSpan.FromMilliseconds(ms)
-            };
-            _autoCloseTimer.Tick += (s, e) =>
-            {
-                _autoCloseTimer?.Stop();
-                _allowAutoClose = true;
-                // If the user already moved on (popup lost focus during the grace
-                // period), close it now that reading time is up.
-                if (!this.IsActive)
-                {
-                    CloseWithFade();
-                }
-            };
-            _autoCloseTimer.Start();
-        }
-
         private void CloseWithFade()
         {
             if (_isClosing) return;
             _isClosing = true;
-            _autoCloseTimer?.Stop();
 
             // Fade out animation
             var fadeOut = new DoubleAnimation

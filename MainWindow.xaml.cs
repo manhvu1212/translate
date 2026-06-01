@@ -64,9 +64,10 @@ namespace AITranslator
                 ApplySettings();
 
                 // Auto-show settings window if no keys configured
-                if (string.IsNullOrEmpty(_settings.GeminiApiKey) && 
-                    string.IsNullOrEmpty(_settings.OpenAIApiKey) && 
-                    string.IsNullOrEmpty(_settings.ClaudeApiKey))
+                if (string.IsNullOrEmpty(_settings.GeminiApiKey) &&
+                    string.IsNullOrEmpty(_settings.OpenAIApiKey) &&
+                    string.IsNullOrEmpty(_settings.ClaudeApiKey) &&
+                    string.IsNullOrEmpty(_settings.GroqApiKey))
                 {
                     ShowSettingsWindow();
                 }

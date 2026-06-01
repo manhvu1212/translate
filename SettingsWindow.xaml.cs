@@ -14,11 +14,13 @@ namespace AITranslator
         private string _geminiKey = "";
         private string _openAiKey = "";
         private string _claudeKey = "";
+        private string _groqKey = "";
 
         // Track visibility status for each key
         private bool _isGeminiVisible = false;
         private bool _isOpenAiVisible = false;
         private bool _isClaudeVisible = false;
+        private bool _isGroqVisible = false;
 
         private uint _hotkeyModifiers = 1; // Default Alt
         private uint _hotkeyKey = 0x51;    // Default Q
@@ -49,6 +51,7 @@ namespace AITranslator
             {
                 "OpenAI" => 1,
                 "Claude" => 2,
+                "Groq" => 3,
                 _ => 0 // Gemini is default
             };
 
@@ -56,21 +59,25 @@ namespace AITranslator
             _geminiKey = _settings.GeminiApiKey;
             _openAiKey = _settings.OpenAIApiKey;
             _claudeKey = _settings.ClaudeApiKey;
+            _groqKey = _settings.GroqApiKey;
 
             // Set Masked Text initially
             TxtGeminiKey.Text = string.IsNullOrEmpty(_geminiKey) ? "" : MaskedString;
             TxtOpenAIKey.Text = string.IsNullOrEmpty(_openAiKey) ? "" : MaskedString;
             TxtClaudeKey.Text = string.IsNullOrEmpty(_claudeKey) ? "" : MaskedString;
+            TxtGroqKey.Text = string.IsNullOrEmpty(_groqKey) ? "" : MaskedString;
 
             // Setup TextChanged listeners after initial load
             TxtGeminiKey.TextChanged += TxtGeminiKey_TextChanged;
             TxtOpenAIKey.TextChanged += TxtOpenAIKey_TextChanged;
             TxtClaudeKey.TextChanged += TxtClaudeKey_TextChanged;
+            TxtGroqKey.TextChanged += TxtGroqKey_TextChanged;
 
             // Load Models - Select corresponding model or add it if not in defaults
             SetComboBoxValue(CboGeminiModel, _settings.GeminiModel);
             SetComboBoxValue(CboOpenAIModel, _settings.OpenAIModel);
             SetComboBoxValue(CboClaudeModel, _settings.ClaudeModel);
+            SetComboBoxValue(CboGroqModel, _settings.GroqModel);
 
 
 
@@ -121,13 +128,14 @@ namespace AITranslator
 
         private void UpdateProviderSections()
         {
-            if (SecGemini == null || SecOpenAI == null || SecClaude == null || CboProvider == null) return;
+            if (SecGemini == null || SecOpenAI == null || SecClaude == null || SecGroq == null || CboProvider == null) return;
 
             string provider = GetSelectedProvider();
-            
+
             SecGemini.Visibility = provider == "Gemini" ? Visibility.Visible : Visibility.Collapsed;
             SecOpenAI.Visibility = provider == "OpenAI" ? Visibility.Visible : Visibility.Collapsed;
             SecClaude.Visibility = provider == "Claude" ? Visibility.Visible : Visibility.Collapsed;
+            SecGroq.Visibility = provider == "Groq" ? Visibility.Visible : Visibility.Collapsed;
         }
 
         private string GetSelectedProvider()
@@ -138,6 +146,7 @@ namespace AITranslator
                 if (text.Contains("Gemini")) return "Gemini";
                 if (text.Contains("OpenAI") || text.Contains("ChatGPT")) return "OpenAI";
                 if (text.Contains("Claude")) return "Claude";
+                if (text.Contains("Groq")) return "Groq";
             }
             return "Gemini";
         }
@@ -164,6 +173,12 @@ namespace AITranslator
                 _isClaudeVisible = !_isClaudeVisible;
                 TxtClaudeKey.Text = _isClaudeVisible ? _claudeKey : (string.IsNullOrEmpty(_claudeKey) ? "" : MaskedString);
                 button.Content = _isClaudeVisible ? "🔒" : "👁️";
+            }
+            else if (button == BtnToggleGroq)
+            {
+                _isGroqVisible = !_isGroqVisible;
+                TxtGroqKey.Text = _isGroqVisible ? _groqKey : (string.IsNullOrEmpty(_groqKey) ? "" : MaskedString);
+                button.Content = _isGroqVisible ? "🔒" : "👁️";
             }
         }
 
@@ -192,6 +207,14 @@ namespace AITranslator
             }
         }
 
+        private void TxtGroqKey_TextChanged(object sender, TextChangedEventArgs e)
+        {
+            if (TxtGroqKey.Text != MaskedString)
+            {
+                _groqKey = TxtGroqKey.Text;
+            }
+        }
+
         // Test API Connection
         private async void BtnTest_Click(object sender, RoutedEventArgs e)
         {
@@ -205,9 +228,11 @@ namespace AITranslator
                 GeminiApiKey = _geminiKey,
                 OpenAIApiKey = _openAiKey,
                 ClaudeApiKey = _claudeKey,
+                GroqApiKey = _groqKey,
                 GeminiModel = GetComboBoxValue(CboGeminiModel),
                 OpenAIModel = GetComboBoxValue(CboOpenAIModel),
                 ClaudeModel = GetComboBoxValue(CboClaudeModel),
+                GroqModel = GetComboBoxValue(CboGroqModel),
                 TargetLanguage = _settings.TargetLanguage
             };
 
@@ -245,10 +270,12 @@ namespace AITranslator
             _settings.GeminiApiKey = _geminiKey;
             _settings.OpenAIApiKey = _openAiKey;
             _settings.ClaudeApiKey = _claudeKey;
+            _settings.GroqApiKey = _groqKey;
 
             _settings.GeminiModel = GetComboBoxValue(CboGeminiModel);
             _settings.OpenAIModel = GetComboBoxValue(CboOpenAIModel);
             _settings.ClaudeModel = GetComboBoxValue(CboClaudeModel);
+            _settings.GroqModel = GetComboBoxValue(CboGroqModel);
 
 
 
@@ -331,6 +358,24 @@ namespace AITranslator
             _hotkeyKey = 0;
             _hotkeyText = "Disabled";
             TxtHotkey.Text = "None";
+        }
+
+        // Open API key pages in the user's default browser.
+        private void Hyperlink_RequestNavigate(object sender, System.Windows.Navigation.RequestNavigateEventArgs e)
+        {
+            try
+            {
+                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+                {
+                    FileName = e.Uri.AbsoluteUri,
+                    UseShellExecute = true
+                });
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Không thể mở liên kết: {ex.Message}", "Lỗi", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+            e.Handled = true;
         }
     }
 }

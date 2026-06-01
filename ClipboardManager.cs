@@ -128,11 +128,11 @@ namespace AITranslator
         {
             _isInternalCopy = true;
             string selectedText = string.Empty;
+            IDataObject? originalData = null;
 
             try
             {
                 // 1. Backup original clipboard content
-                IDataObject? originalData = null;
                 try
                 {
                     originalData = Clipboard.GetDataObject();
@@ -151,7 +151,7 @@ namespace AITranslator
                 const byte VK_SHIFT = 0x10;   // Shift
                 const byte VK_LWIN = 0x5B;    // Left Windows key
                 const byte VK_RWIN = 0x5C;    // Right Windows key
-                
+
                 keybd_event(VK_CONTROL, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
                 keybd_event(VK_MENU, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
                 keybd_event(VK_SHIFT, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
@@ -165,19 +165,19 @@ namespace AITranslator
                 }
 
                 // Wait a short moment to let Windows and the active window process the key releases
-                await Task.Delay(50);
+                await Task.Delay(35);
 
-                // Now simulate Ctrl+C with micro-delays for maximum reliability across various apps
+                // Now simulate Ctrl+C with micro-delays for reliability across various apps
                 keybd_event(VK_CONTROL, 0, KEYEVENTF_KEYDOWN, UIntPtr.Zero);
-                await Task.Delay(10);
+                await Task.Delay(8);
                 keybd_event(VK_C, 0, KEYEVENTF_KEYDOWN, UIntPtr.Zero);
-                await Task.Delay(10);
+                await Task.Delay(8);
                 keybd_event(VK_C, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
-                await Task.Delay(10);
+                await Task.Delay(8);
                 keybd_event(VK_CONTROL, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
 
                 // 4. Wait for copy to complete (with timeout)
-                int timeoutMs = 300; // slightly increased for slow apps
+                int timeoutMs = 300; // upper bound for slow apps
                 int elapsed = 0;
                 while (elapsed < timeoutMs)
                 {
@@ -186,14 +186,30 @@ namespace AITranslator
                         selectedText = Clipboard.GetText();
                         break;
                     }
-                    await Task.Delay(25);
-                    elapsed += 25;
+                    await Task.Delay(20);
+                    elapsed += 20;
                 }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Error during clipboard get selected text: {ex.Message}");
+            }
 
-                // 5. Restore original clipboard
+            // 5. Restore the original clipboard in the background. The popup only needs
+            // the captured text, so we return immediately instead of blocking on the
+            // (potentially slow) clipboard flush — this makes the window appear faster.
+            _ = RestoreClipboardAsync(originalData);
+
+            return selectedText;
+        }
+
+        private static async Task RestoreClipboardAsync(IDataObject? originalData)
+        {
+            try
+            {
                 if (originalData != null)
                 {
-                    // Small delay to ensure Windows clipboard queue is clear
+                    // Small delay to ensure the Windows clipboard queue is clear.
                     await Task.Delay(50);
                     try
                     {
@@ -205,18 +221,12 @@ namespace AITranslator
                     }
                 }
             }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"Error during clipboard get selected text: {ex.Message}");
-            }
             finally
             {
-                // Give OS time to finalize clipboard restore before we process new manual copies
+                // Give the OS time to finalize the restore before manual copies are processed again.
                 await Task.Delay(100);
                 _isInternalCopy = false;
             }
-
-            return selectedText;
         }
 
         public void Dispose()

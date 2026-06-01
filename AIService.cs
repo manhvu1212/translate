@@ -30,6 +30,7 @@ namespace AITranslator
                 "OpenAI" => settings.OpenAIModel,
                 "Claude" => settings.ClaudeModel,
                 "Gemini" => settings.GeminiModel,
+                "Groq" => settings.GroqModel,
                 _ => ""
             };
 
@@ -60,6 +61,7 @@ namespace AITranslator
                     "Gemini" => await TranslateWithGeminiAsync(prompt, model, settings.GeminiApiKey),
                     "OpenAI" => await TranslateWithOpenAIAsync(prompt, model, settings.OpenAIApiKey),
                     "Claude" => await TranslateWithClaudeAsync(prompt, model, settings.ClaudeApiKey),
+                    "Groq" => await TranslateWithGroqAsync(prompt, model, settings.GroqApiKey),
                     _ => $"Lỗi: Nhà cung cấp AI '{provider}' không được hỗ trợ."
                 };
             }
@@ -132,12 +134,24 @@ namespace AITranslator
             return "Lỗi định dạng phản hồi từ Gemini API.";
         }
 
-        private async Task<string> TranslateWithOpenAIAsync(string prompt, string model, string apiKey)
+        private Task<string> TranslateWithOpenAIAsync(string prompt, string model, string apiKey)
+        {
+            return TranslateWithOpenAICompatibleAsync(
+                "https://api.openai.com/v1/chat/completions", prompt, model, apiKey, "OpenAI");
+        }
+
+        // Groq exposes an OpenAI-compatible Chat Completions API, so it reuses the
+        // exact same request/response handling, only the base URL and label differ.
+        private Task<string> TranslateWithGroqAsync(string prompt, string model, string apiKey)
+        {
+            return TranslateWithOpenAICompatibleAsync(
+                "https://api.groq.com/openai/v1/chat/completions", prompt, model, apiKey, "Groq");
+        }
+
+        private async Task<string> TranslateWithOpenAICompatibleAsync(string url, string prompt, string model, string apiKey, string providerLabel)
         {
             if (string.IsNullOrWhiteSpace(apiKey))
-                return "Lỗi: Vui lòng cấu hình OpenAI API Key trong phần Cài đặt.";
-
-            string url = "https://api.openai.com/v1/chat/completions";
+                return $"Lỗi: Vui lòng cấu hình {providerLabel} API Key trong phần Cài đặt.";
 
             var requestBody = new
             {
@@ -150,7 +164,7 @@ namespace AITranslator
             };
 
             string jsonString = JsonSerializer.Serialize(requestBody);
-            
+
             using var request = new HttpRequestMessage(HttpMethod.Post, url);
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
             request.Content = new StringContent(jsonString, Encoding.UTF8, "application/json");
@@ -160,20 +174,20 @@ namespace AITranslator
 
             if (!response.IsSuccessStatusCode)
             {
-                return ParseApiError(responseString, $"OpenAI API returned code {response.StatusCode}");
+                return ParseApiError(responseString, $"{providerLabel} API returned code {response.StatusCode}");
             }
 
             using var doc = JsonDocument.Parse(responseString);
             var root = doc.RootElement;
 
-            if (root.TryGetProperty("choices", out var choices) && 
+            if (root.TryGetProperty("choices", out var choices) &&
                 choices.GetArrayLength() > 0 &&
                 choices[0].TryGetProperty("message", out var message))
             {
                 return message.GetProperty("content").GetString()?.Trim() ?? "Không nhận được phản hồi dịch.";
             }
 
-            return "Lỗi định dạng phản hồi từ OpenAI API.";
+            return $"Lỗi định dạng phản hồi từ {providerLabel} API.";
         }
 
         private async Task<string> TranslateWithClaudeAsync(string prompt, string model, string apiKey)

@@ -15,7 +15,6 @@
         Background="Transparent"
         Topmost="True"
         ShowInTaskbar="False"
-        Deactivated="Window_Deactivated"
         Loaded="Window_Loaded">
     
     <Window.Resources>
@@ -203,8 +202,8 @@
                     <RowDefinition Height="Auto"/> <!-- Footer / Actions -->
                 </Grid.RowDefinitions>
  
-                <!-- Header / Brand Logo -->
-                <Grid Grid.Row="0" Margin="0,2,0,16">
+                <!-- Header / Brand Logo (drag handle to move the window) -->
+                <Grid Grid.Row="0" Margin="0,2,0,16" Background="Transparent" Cursor="SizeAll" MouseLeftButtonDown="Header_MouseLeftButtonDown" ToolTip="Kéo để di chuyển cửa sổ">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="Auto"/>
                         <ColumnDefinition Width="*"/>

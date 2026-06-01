@@ -17,10 +17,12 @@ namespace AITranslator
         public string GeminiApiKey { get; set; } = "";
         public string OpenAIApiKey { get; set; } = "";
         public string ClaudeApiKey { get; set; } = "";
+        public string GroqApiKey { get; set; } = "";
 
         public string GeminiModel { get; set; } = "gemini-2.5-flash";
         public string OpenAIModel { get; set; } = "gpt-4o-mini";
         public string ClaudeModel { get; set; } = "claude-3-5-haiku";
+        public string GroqModel { get; set; } = "llama-3.3-70b-versatile";
 
         public string TargetLanguage { get; set; } = "Vietnamese";
 
