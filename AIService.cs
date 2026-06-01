@@ -8,6 +8,13 @@ using System.Threading.Tasks;
 
 namespace AITranslator
 {
+    public class TranslationResult
+    {
+        public string Text { get; set; } = "";
+        public string DetectedSourceLang { get; set; } = "";
+        public string ActualTargetLang { get; set; } = "";
+    }
+
     public class AIService
     {
         private static readonly HttpClient client = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
@@ -18,10 +25,10 @@ namespace AITranslator
         private static readonly ConcurrentDictionary<string, string> _translationCache = new();
         private const int MaxCacheEntries = 300;
 
-        public async Task<string> TranslateAsync(string text, AppSettings settings)
+        public async Task<TranslationResult> TranslateAsync(string text, AppSettings settings)
         {
             if (string.IsNullOrWhiteSpace(text))
-                return "Vui lòng bôi đen văn bản cần dịch.";
+                return new TranslationResult { Text = "Vui lòng bôi đen văn bản cần dịch." };
 
             string provider = settings.SelectedProvider;
             string targetLanguage = settings.TargetLanguage;
@@ -39,7 +46,7 @@ namespace AITranslator
             string cacheKey = $"{provider}|{model}|{targetLanguage}|{text}";
             if (_translationCache.TryGetValue(cacheKey, out string? cached))
             {
-                return cached;
+                return ParseTranslationResult(cached, targetLanguage);
             }
 
             // System prompt for high-quality, direct translations
@@ -49,7 +56,9 @@ namespace AITranslator
                             $"- Translate the input text to {targetLanguage}.\n" +
                             $"- Exception: If the input text is already in {targetLanguage} (linguistically and grammatically), translate it to {fallbackLanguage} instead. " +
                             $"Do NOT trigger this exception for different languages that happen to share characters (for example, Chinese text is NOT Japanese and is NOT Korean; do not treat Chinese Hanzi as Japanese Kanji or Korean Hanja).\n" +
-                            $"- Return ONLY the translation, without any introduction, explanations, quotes, markdown wrappers, or extra notes.\n" +
+                            $"- On the VERY FIRST line of your response, output a language metadata tag in this exact format: [DETECTED_SOURCE_LANGUAGE->ACTUAL_TARGET_LANGUAGE]\n" +
+                            $"  Use one of these exact values for both languages: Vietnamese, English, Japanese, Korean, Chinese.\n" +
+                            $"- Starting from the second line, output ONLY the translation, without any introduction, explanations, quotes, markdown wrappers, or extra notes.\n" +
                             $"- Keep formatting, line breaks, and punctuation identical to the source.\n\n" +
                             $"Text to translate:\n{text}";
 
@@ -67,7 +76,7 @@ namespace AITranslator
             }
             catch (Exception ex)
             {
-                return $"Lỗi kết nối API ({provider}): {ex.Message}\n\nHãy kiểm tra lại API Key và kết nối mạng của bạn.";
+                return new TranslationResult { Text = $"Lỗi kết nối API ({provider}): {ex.Message}\n\nHãy kiểm tra lại API Key và kết nối mạng của bạn." };
             }
 
             // Only cache successful translations, never error messages.
@@ -76,7 +85,32 @@ namespace AITranslator
                 CacheTranslation(cacheKey, result);
             }
 
-            return result;
+            return ParseTranslationResult(result, targetLanguage);
+        }
+
+        private static TranslationResult ParseTranslationResult(string rawResult, string requestedTargetLang)
+        {
+            var tr = new TranslationResult { Text = rawResult, ActualTargetLang = requestedTargetLang };
+
+            // Try to parse [SOURCE->TARGET] prefix on the first line
+            if (rawResult.StartsWith("[") && rawResult.Contains("->")
+                && !rawResult.StartsWith("Lỗi"))
+            {
+                int closeBracket = rawResult.IndexOf(']');
+                if (closeBracket > 0)
+                {
+                    string tag = rawResult.Substring(1, closeBracket - 1);
+                    string[] parts = tag.Split("->");
+                    if (parts.Length == 2)
+                    {
+                        tr.DetectedSourceLang = parts[0].Trim();
+                        tr.ActualTargetLang = parts[1].Trim();
+                        tr.Text = rawResult.Substring(closeBracket + 1).TrimStart('\r', '\n', ' ');
+                    }
+                }
+            }
+
+            return tr;
         }
 
         public async Task<string> RewriteAsync(string text, string tone, AppSettings settings)

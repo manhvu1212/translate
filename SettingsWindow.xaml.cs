@@ -254,7 +254,8 @@ namespace AITranslator
             try
             {
                 var aiService = new AIService();
-                string result = await Task.Run(() => aiService.TranslateAsync(testText, testSettings));
+                var translateResult = await Task.Run(() => aiService.TranslateAsync(testText, testSettings));
+                string result = translateResult.Text;
 
                 bool isError = result.StartsWith("Lỗi") || result.StartsWith("Error");
                 if (isError)
