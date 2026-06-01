@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text;
@@ -11,6 +12,12 @@ namespace AITranslator
     {
         private static readonly HttpClient client = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
 
+        // Caches successful translations so re-triggering the same selection
+        // (e.g. after the popup was accidentally dismissed) is instant and free.
+        // Keyed by provider + model + target language + source text.
+        private static readonly ConcurrentDictionary<string, string> _translationCache = new();
+        private const int MaxCacheEntries = 300;
+
         public async Task<string> TranslateAsync(string text, AppSettings settings)
         {
             if (string.IsNullOrWhiteSpace(text))
@@ -18,6 +25,21 @@ namespace AITranslator
 
             string provider = settings.SelectedProvider;
             string targetLanguage = settings.TargetLanguage;
+            string model = provider switch
+            {
+                "OpenAI" => settings.OpenAIModel,
+                "Claude" => settings.ClaudeModel,
+                "Gemini" => settings.GeminiModel,
+                _ => ""
+            };
+
+            // Serve a previously translated result instantly (no API call) when the
+            // exact same text is requested again under the same provider/model/target.
+            string cacheKey = $"{provider}|{model}|{targetLanguage}|{text}";
+            if (_translationCache.TryGetValue(cacheKey, out string? cached))
+            {
+                return cached;
+            }
 
             // System prompt for high-quality, direct translations
             string fallbackLanguage = targetLanguage.Equals("English", StringComparison.OrdinalIgnoreCase) ? "Vietnamese" : "English";
@@ -30,24 +52,39 @@ namespace AITranslator
                             $"- Keep formatting, line breaks, and punctuation identical to the source.\n\n" +
                             $"Text to translate:\n{text}";
 
+            string result;
             try
             {
-                switch (provider)
+                result = provider switch
                 {
-                    case "Gemini":
-                        return await TranslateWithGeminiAsync(prompt, settings.GeminiModel, settings.GeminiApiKey);
-                    case "OpenAI":
-                        return await TranslateWithOpenAIAsync(prompt, settings.OpenAIModel, settings.OpenAIApiKey);
-                    case "Claude":
-                        return await TranslateWithClaudeAsync(prompt, settings.ClaudeModel, settings.ClaudeApiKey);
-                    default:
-                        return $"Lỗi: Nhà cung cấp AI '{provider}' không được hỗ trợ.";
-                }
+                    "Gemini" => await TranslateWithGeminiAsync(prompt, model, settings.GeminiApiKey),
+                    "OpenAI" => await TranslateWithOpenAIAsync(prompt, model, settings.OpenAIApiKey),
+                    "Claude" => await TranslateWithClaudeAsync(prompt, model, settings.ClaudeApiKey),
+                    _ => $"Lỗi: Nhà cung cấp AI '{provider}' không được hỗ trợ."
+                };
             }
             catch (Exception ex)
             {
                 return $"Lỗi kết nối API ({provider}): {ex.Message}\n\nHãy kiểm tra lại API Key và kết nối mạng của bạn.";
             }
+
+            // Only cache successful translations, never error messages.
+            if (!result.StartsWith("Lỗi"))
+            {
+                CacheTranslation(cacheKey, result);
+            }
+
+            return result;
+        }
+
+        private static void CacheTranslation(string key, string value)
+        {
+            // Crude bound so a long-running tray session doesn't grow unbounded.
+            if (_translationCache.Count >= MaxCacheEntries)
+            {
+                _translationCache.Clear();
+            }
+            _translationCache[key] = value;
         }
 
         private async Task<string> TranslateWithGeminiAsync(string prompt, string model, string apiKey)

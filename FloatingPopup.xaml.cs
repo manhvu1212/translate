@@ -2,6 +2,7 @@ using System;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
 
@@ -14,6 +15,11 @@ namespace AITranslator
         private readonly AIService _aiService;
         private bool _isClosing = false;
         private System.Drawing.Point? _initialMousePosition;
+
+        // Auto-close on lost focus is disabled while translating, and during a
+        // reading grace period after a result arrives. Manual close is unaffected.
+        private bool _allowAutoClose = false;
+        private System.Windows.Threading.DispatcherTimer? _autoCloseTimer;
 
         public event Action? SettingsRequested;
 
@@ -33,6 +39,18 @@ namespace AITranslator
             
             // Highlight target language pill
             HighlightActiveLanguagePill();
+
+            // Esc closes the popup, regardless of the auto-close grace period.
+            this.PreviewKeyDown += FloatingPopup_PreviewKeyDown;
+        }
+
+        private void FloatingPopup_PreviewKeyDown(object sender, KeyEventArgs e)
+        {
+            if (e.Key == Key.Escape)
+            {
+                CloseWithFade();
+                e.Handled = true;
+            }
         }
 
         private string GetActiveModelName()
@@ -124,20 +142,28 @@ namespace AITranslator
         private async Task PerformTranslationAsync()
         {
             BtnRetry.Visibility = Visibility.Collapsed;
+
+            // A new translation is starting (initial, retry, or language switch):
+            // block auto-close until it finishes and the reading grace elapses.
+            CancelAutoClose();
+
             try
             {
                 string result = await _aiService.TranslateAsync(_originalText, _settings);
                 TxtTranslated.Text = result;
-                
+
                 if (result.StartsWith("Lỗi"))
                 {
                     SetStatusColor(Brushes.Red); // Red dot for error
                     BtnRetry.Visibility = Visibility.Visible;
+                    // Keep the popup open on error so the user can read it or retry.
                 }
                 else
                 {
                     SetStatusColor(Brushes.LimeGreen); // Green dot for success
                     BtnRetry.Visibility = Visibility.Collapsed;
+                    // Allow auto-close only after a reading grace period sized to the text.
+                    ScheduleAutoClose(result);
                 }
             }
             catch (Exception ex)
@@ -199,14 +225,50 @@ namespace AITranslator
 
         private void Window_Deactivated(object sender, EventArgs e)
         {
-            // Auto hide when user clicks outside the popup
+            // Only auto-hide once translating has finished AND the reading grace
+            // period has elapsed. Until then, keep the popup open on lost focus.
+            if (!_allowAutoClose) return;
             CloseWithFade();
+        }
+
+        private void CancelAutoClose()
+        {
+            _allowAutoClose = false;
+            _autoCloseTimer?.Stop();
+        }
+
+        private void ScheduleAutoClose(string translatedText)
+        {
+            _autoCloseTimer?.Stop();
+
+            // Reading grace: a base time plus extra per character, clamped so it
+            // never feels too snappy nor lingers excessively.
+            int length = translatedText?.Length ?? 0;
+            double ms = Math.Clamp(1500 + length * 35.0, 2000, 12000);
+
+            _autoCloseTimer = new System.Windows.Threading.DispatcherTimer
+            {
+                Interval = TimeSpan.FromMilliseconds(ms)
+            };
+            _autoCloseTimer.Tick += (s, e) =>
+            {
+                _autoCloseTimer?.Stop();
+                _allowAutoClose = true;
+                // If the user already moved on (popup lost focus during the grace
+                // period), close it now that reading time is up.
+                if (!this.IsActive)
+                {
+                    CloseWithFade();
+                }
+            };
+            _autoCloseTimer.Start();
         }
 
         private void CloseWithFade()
         {
             if (_isClosing) return;
             _isClosing = true;
+            _autoCloseTimer?.Stop();
 
             // Fade out animation
             var fadeOut = new DoubleAnimation
