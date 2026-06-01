@@ -17,15 +17,13 @@ namespace AITranslator
         private readonly Window _window;
         private IntPtr _hwnd;
         private HwndSource? _hwndSource;
-        private readonly int _hotkeyId;
-        private bool _isRegistered = false;
+        private readonly System.Collections.Generic.HashSet<int> _registeredIds = new();
 
-        public event Action? HotkeyPressed;
+        public event Action<int>? HotkeyPressed;
 
-        public KeyboardHook(Window window, int hotkeyId = 9000)
+        public KeyboardHook(Window window)
         {
             _window = window;
-            _hotkeyId = hotkeyId;
             
             var helper = new WindowInteropHelper(_window);
             if (helper.Handle != IntPtr.Zero)
@@ -47,41 +45,61 @@ namespace AITranslator
             _hwndSource?.AddHook(HwndHook);
         }
 
-        public bool Register(uint modifiers, uint key)
+        public bool Register(int id, uint modifiers, uint key)
         {
-            Unregister();
+            Unregister(id);
 
             if (_hwnd == IntPtr.Zero)
             {
                 return false;
             }
 
-            _isRegistered = RegisterHotKey(_hwnd, _hotkeyId, modifiers, key);
-            return _isRegistered;
+            bool success = RegisterHotKey(_hwnd, id, modifiers, key);
+            if (success)
+            {
+                _registeredIds.Add(id);
+            }
+            return success;
         }
 
-        public void Unregister()
+        public void Unregister(int id)
         {
-            if (_isRegistered && _hwnd != IntPtr.Zero)
+            if (_registeredIds.Contains(id) && _hwnd != IntPtr.Zero)
             {
-                UnregisterHotKey(_hwnd, _hotkeyId);
-                _isRegistered = false;
+                UnregisterHotKey(_hwnd, id);
+                _registeredIds.Remove(id);
             }
+        }
+
+        public void UnregisterAll()
+        {
+            if (_hwnd != IntPtr.Zero)
+            {
+                foreach (int id in new System.Collections.Generic.List<int>(_registeredIds))
+                {
+                    UnregisterHotKey(_hwnd, id);
+                }
+            }
+            _registeredIds.Clear();
         }
 
         private IntPtr HwndHook(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
         {
-            if (msg == WM_HOTKEY && wParam.ToInt32() == _hotkeyId)
+            if (msg == WM_HOTKEY)
             {
-                HotkeyPressed?.Invoke();
-                handled = true;
+                int id = wParam.ToInt32();
+                if (_registeredIds.Contains(id))
+                {
+                    HotkeyPressed?.Invoke(id);
+                    handled = true;
+                }
             }
             return IntPtr.Zero;
         }
 
         public void Dispose()
         {
-            Unregister();
+            UnregisterAll();
             _hwndSource?.RemoveHook(HwndHook);
             _hwndSource?.Dispose();
             GC.SuppressFinalize(this);

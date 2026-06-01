@@ -26,6 +26,10 @@ namespace AITranslator
         private uint _hotkeyKey = 0x51;    // Default Q
         private string _hotkeyText = "Alt + Q";
 
+        private uint _rewriteHotkeyModifiers = 1; // Default Alt
+        private uint _rewriteHotkeyKey = 0x57;    // Default W
+        private string _rewriteHotkeyText = "Alt + W";
+
         private const string MaskedString = "••••••••••••••••••••••••••••••••";
 
         public SettingsWindow()
@@ -87,8 +91,17 @@ namespace AITranslator
             _hotkeyText = _settings.HotkeyText;
             TxtHotkey.Text = string.IsNullOrEmpty(_hotkeyText) || _hotkeyText == "Disabled" ? "None" : _hotkeyText;
 
+            // Load Rewrite Hotkey
+            _rewriteHotkeyModifiers = _settings.RewriteHotkeyModifiers;
+            _rewriteHotkeyKey = _settings.RewriteHotkeyKey;
+            _rewriteHotkeyText = _settings.RewriteHotkeyText;
+            TxtRewriteHotkey.Text = string.IsNullOrEmpty(_rewriteHotkeyText) || _rewriteHotkeyText == "Disabled" ? "None" : _rewriteHotkeyText;
+
             // Load Startup Setting
             ChkStartWithWindows.IsChecked = _settings.StartWithWindows;
+
+            // Localize all UI texts
+            LocalizeUI();
 
             UpdateProviderSections();
         }
@@ -243,18 +256,31 @@ namespace AITranslator
                 var aiService = new AIService();
                 string result = await Task.Run(() => aiService.TranslateAsync(testText, testSettings));
 
-                if (result.StartsWith("Lỗi"))
+                bool isError = result.StartsWith("Lỗi") || result.StartsWith("Error");
+                if (isError)
                 {
-                    MessageBox.Show(result, "Kiểm tra kết nối thất bại", MessageBoxButton.OK, MessageBoxImage.Error);
+                    // Clean up error message for display
+                    string cleanError = result;
+                    if (result.StartsWith("Lỗi: ")) cleanError = result.Substring(5);
+                    else if (result.StartsWith("Lỗi API: ")) cleanError = result.Substring(9);
+
+                    string msg = string.Format(LocalizationManager.Get("MsgTestFail", _settings.TargetLanguage), provider, cleanError);
+                    string title = LocalizationManager.Get("MsgTestFailTitle", _settings.TargetLanguage);
+                    MessageBox.Show(msg, title, MessageBoxButton.OK, MessageBoxImage.Error);
                 }
                 else
                 {
-                    MessageBox.Show($"Kết nối thành công!\nPhản hồi từ AI: {result}", "Kiểm tra kết nối thành công", MessageBoxButton.OK, MessageBoxImage.Information);
+                    string msg = string.Format(LocalizationManager.Get("MsgTestSuccess", _settings.TargetLanguage), result);
+                    string title = LocalizationManager.Get("MsgTestSuccessTitle", _settings.TargetLanguage);
+                    MessageBox.Show(msg, title, MessageBoxButton.OK, MessageBoxImage.Information);
                 }
             }
             catch (Exception ex)
             {
-                MessageBox.Show($"Lỗi kết nối: {ex.Message}", "Lỗi", MessageBoxButton.OK, MessageBoxImage.Error);
+                string actionName = _settings.TargetLanguage.StartsWith("vi", StringComparison.OrdinalIgnoreCase) ? "kết nối" : "connecting";
+                string msg = string.Format(LocalizationManager.Get("ErrorSystem", _settings.TargetLanguage), actionName, ex.Message);
+                string title = LocalizationManager.Get("Error", _settings.TargetLanguage);
+                MessageBox.Show(msg, title, MessageBoxButton.OK, MessageBoxImage.Error);
             }
             finally
             {
@@ -283,6 +309,12 @@ namespace AITranslator
             _settings.HotkeyModifiers = _hotkeyModifiers;
             _settings.HotkeyKey = _hotkeyKey;
             _settings.HotkeyText = _hotkeyText;
+
+            // Save Rewrite Hotkey
+            _settings.RewriteHotkeyModifiers = _rewriteHotkeyModifiers;
+            _settings.RewriteHotkeyKey = _rewriteHotkeyKey;
+            _settings.RewriteHotkeyText = _rewriteHotkeyText;
+
             _settings.EnableDoubleCopy = false; // Disabled
 
             // Save Startup Setting
@@ -332,13 +364,6 @@ namespace AITranslator
                 return;
             }
 
-            // Map WPF ModifierKeys to Win32 modifier flags
-            // None = 0, Alt = 1, Control = 2, Shift = 4, Windows = 8
-            _hotkeyModifiers = (uint)modifiers;
-
-            // Convert WPF Key to Win32 Virtual Key code
-            _hotkeyKey = (uint)System.Windows.Input.KeyInterop.VirtualKeyFromKey(key);
-
             // Format hotkey text display
             var parts = new System.Collections.Generic.List<string>();
             if (modifiers.HasFlag(System.Windows.Input.ModifierKeys.Control)) parts.Add("Ctrl");
@@ -347,9 +372,23 @@ namespace AITranslator
             if (modifiers.HasFlag(System.Windows.Input.ModifierKeys.Windows)) parts.Add("Win");
             
             parts.Add(key.ToString());
-            _hotkeyText = string.Join(" + ", parts);
+            string hotkeyText = string.Join(" + ", parts);
 
-            TxtHotkey.Text = _hotkeyText;
+            var textBox = sender as TextBox;
+            if (textBox == TxtRewriteHotkey)
+            {
+                _rewriteHotkeyModifiers = (uint)modifiers;
+                _rewriteHotkeyKey = (uint)System.Windows.Input.KeyInterop.VirtualKeyFromKey(key);
+                _rewriteHotkeyText = hotkeyText;
+                TxtRewriteHotkey.Text = _rewriteHotkeyText;
+            }
+            else
+            {
+                _hotkeyModifiers = (uint)modifiers;
+                _hotkeyKey = (uint)System.Windows.Input.KeyInterop.VirtualKeyFromKey(key);
+                _hotkeyText = hotkeyText;
+                TxtHotkey.Text = _hotkeyText;
+            }
         }
 
         private void BtnClearHotkey_Click(object sender, RoutedEventArgs e)
@@ -358,6 +397,79 @@ namespace AITranslator
             _hotkeyKey = 0;
             _hotkeyText = "Disabled";
             TxtHotkey.Text = "None";
+        }
+
+        private void BtnClearRewriteHotkey_Click(object sender, RoutedEventArgs e)
+        {
+            _rewriteHotkeyModifiers = 0;
+            _rewriteHotkeyKey = 0;
+            _rewriteHotkeyText = "Disabled";
+            TxtRewriteHotkey.Text = "None";
+        }
+
+        private void LocalizeUI()
+        {
+            string lang = _settings.TargetLanguage;
+
+            if (LblSettingsTitle != null) LblSettingsTitle.Text = LocalizationManager.Get("SettingsTitle", lang);
+            if (LblSettingsSubtitle != null) LblSettingsSubtitle.Text = LocalizationManager.Get("SettingsSubtitle", lang);
+            if (LblAiProvider != null) LblAiProvider.Text = LocalizationManager.Get("SettingsAiProvider", lang);
+
+            // API Config titles
+            if (LblGeminiTitle != null) LblGeminiTitle.Text = string.Format(LocalizationManager.Get("SettingsConfigFor", lang), "Gemini");
+            if (LblOpenAITitle != null) LblOpenAITitle.Text = string.Format(LocalizationManager.Get("SettingsConfigFor", lang), "OpenAI");
+            if (LblClaudeTitle != null) LblClaudeTitle.Text = string.Format(LocalizationManager.Get("SettingsConfigFor", lang), "Claude");
+            if (LblGroqTitle != null) LblGroqTitle.Text = string.Format(LocalizationManager.Get("SettingsConfigFor", lang), "Groq");
+
+            // Key labels and links
+            if (RunGeminiKeyLabel != null) RunGeminiKeyLabel.Text = string.Format(LocalizationManager.Get("SettingsApiKey", lang), "Gemini");
+            if (LinkGeminiKey != null)
+            {
+                LinkGeminiKey.Inlines.Clear();
+                LinkGeminiKey.Inlines.Add(LocalizationManager.Get("SettingsGetApiKey", lang));
+            }
+
+            if (RunOpenAIKeyLabel != null) RunOpenAIKeyLabel.Text = string.Format(LocalizationManager.Get("SettingsApiKey", lang), "OpenAI");
+            if (LinkOpenAIKey != null)
+            {
+                LinkOpenAIKey.Inlines.Clear();
+                LinkOpenAIKey.Inlines.Add(LocalizationManager.Get("SettingsGetApiKey", lang));
+            }
+
+            if (RunClaudeKeyLabel != null) RunClaudeKeyLabel.Text = string.Format(LocalizationManager.Get("SettingsApiKey", lang), "Claude");
+            if (LinkClaudeKey != null)
+            {
+                LinkClaudeKey.Inlines.Clear();
+                LinkClaudeKey.Inlines.Add(LocalizationManager.Get("SettingsGetApiKey", lang));
+            }
+
+            if (RunGroqKeyLabel != null) RunGroqKeyLabel.Text = string.Format(LocalizationManager.Get("SettingsApiKey", lang), "Groq");
+            if (LinkGroqKey != null)
+            {
+                LinkGroqKey.Inlines.Clear();
+                LinkGroqKey.Inlines.Add(LocalizationManager.Get("SettingsGetApiKey", lang));
+            }
+
+            // Model labels
+            if (LblGeminiModel != null) LblGeminiModel.Text = string.Format(LocalizationManager.Get("SettingsModel", lang), "Gemini");
+            if (LblOpenAIModel != null) LblOpenAIModel.Text = string.Format(LocalizationManager.Get("SettingsModel", lang), "OpenAI");
+            if (LblClaudeModel != null) LblClaudeModel.Text = string.Format(LocalizationManager.Get("SettingsModel", lang), "Claude");
+            if (LblGroqModel != null) LblGroqModel.Text = string.Format(LocalizationManager.Get("SettingsModel", lang), "Groq");
+
+            // Hotkeys
+            if (LblHotkeyTranslate != null) LblHotkeyTranslate.Text = LocalizationManager.Get("SettingsHotkeyTranslate", lang);
+            if (LblHotkeyRewrite != null) LblHotkeyRewrite.Text = LocalizationManager.Get("SettingsHotkeyRewrite", lang);
+            if (LblHotkeyInstruction != null) LblHotkeyInstruction.Text = LocalizationManager.Get("SettingsHotkeyInstruction", lang);
+
+            // Checkbox
+            if (ChkStartWithWindows != null) ChkStartWithWindows.Content = LocalizationManager.Get("SettingsStartWithWindows", lang);
+
+            // Buttons
+            if (BtnTest != null) BtnTest.Content = LocalizationManager.Get("SettingsBtnTest", lang);
+            if (BtnSave != null) BtnSave.Content = LocalizationManager.Get("SettingsBtnSave", lang);
+            if (BtnCancel != null) BtnCancel.Content = LocalizationManager.Get("SettingsBtnClose", lang);
+            if (BtnClearHotkey != null) BtnClearHotkey.Content = LocalizationManager.Get("BtnClear", lang);
+            if (BtnClearRewriteHotkey != null) BtnClearRewriteHotkey.Content = LocalizationManager.Get("BtnClear", lang);
         }
 
         // Open API key pages in the user's default browser.
@@ -373,7 +485,9 @@ namespace AITranslator
             }
             catch (Exception ex)
             {
-                MessageBox.Show($"Không thể mở liên kết: {ex.Message}", "Lỗi", MessageBoxButton.OK, MessageBoxImage.Error);
+                string msg = string.Format(LocalizationManager.Get("MsgOpenLinkError", _settings.TargetLanguage), ex.Message);
+                string title = LocalizationManager.Get("Error", _settings.TargetLanguage);
+                MessageBox.Show(msg, title, MessageBoxButton.OK, MessageBoxImage.Error);
             }
             e.Handled = true;
         }

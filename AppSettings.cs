@@ -32,6 +32,11 @@ namespace AITranslator
         public uint HotkeyKey { get; set; } = 0x51; // Q key (virtual key code)
         public string HotkeyText { get; set; } = "Alt + Q";
 
+        // Rewrite Hotkey settings (Default Alt + W)
+        public uint RewriteHotkeyModifiers { get; set; } = 1; // Alt
+        public uint RewriteHotkeyKey { get; set; } = 0x57; // W key (virtual key code)
+        public string RewriteHotkeyText { get; set; } = "Alt + W";
+
         public bool EnableDoubleCopy { get; set; } = true;
         
         public bool StartWithWindows { get; set; } = false;

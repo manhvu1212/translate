@@ -195,11 +195,15 @@
             
             <Grid Margin="16,12,16,12">
                 <Grid.RowDefinitions>
-                    <RowDefinition Height="Auto"/> <!-- Header / Brand Logo -->
-                    <RowDefinition Height="Auto"/> <!-- Original Text -->
-                    <RowDefinition Height="Auto"/> <!-- Language Selection Pills -->
-                    <RowDefinition Height="Auto"/> <!-- Translated Text -->
-                    <RowDefinition Height="Auto"/> <!-- Footer / Actions -->
+                    <RowDefinition Height="Auto"/> <!-- Row 0: Header / Brand Logo -->
+                    <RowDefinition Height="Auto"/> <!-- Row 1: Original Text -->
+                    <RowDefinition x:Name="RowTranslateSelection" Height="Auto"/> <!-- Row 2: Translate Selection Pills -->
+                    <RowDefinition x:Name="RowTranslated" Height="Auto"/> <!-- Row 3: Translated Text Area -->
+                    <RowDefinition x:Name="RowRewriteSelection" Height="Auto"/> <!-- Row 4: Rewrite Selection Pills -->
+                    <RowDefinition x:Name="RowRewritten" Height="Auto"/> <!-- Row 5: Rewritten Text Area -->
+                    <RowDefinition x:Name="RowRewriteTranslateSelection" Height="Auto"/> <!-- Row 6: Rewrite Translate Selection Pills -->
+                    <RowDefinition x:Name="RowRewriteTranslated" Height="Auto"/> <!-- Row 7: Rewrite Translated Text Area -->
+                    <RowDefinition Height="Auto"/> <!-- Row 8: Footer / Actions -->
                 </Grid.RowDefinitions>
  
                 <!-- Header / Brand Logo (drag handle to move the window) -->
@@ -222,30 +226,53 @@
                     <Border Grid.Column="1" Height="1" Background="#242434" Margin="14,0,14,0" VerticalAlignment="Center"/>
 
                     <!-- Mode Indicator -->
-                    <TextBlock Grid.Column="2" Text="⚡ Quick Translate" Foreground="#475569" FontSize="8.5" FontWeight="SemiBold" VerticalAlignment="Center" FontFamily="Segoe UI"/>
+                    <TextBlock x:Name="LblQuickTranslate" Grid.Column="2" Text="⚡ Quick Translate" Foreground="#475569" FontSize="8.5" FontWeight="SemiBold" VerticalAlignment="Center" FontFamily="Segoe UI"/>
                 </Grid>
 
-                <!-- Original Text Area -->
-                <ScrollViewer Grid.Row="1" MaxHeight="80" VerticalScrollBarVisibility="Auto" Margin="0,0,0,10">
-                    <TextBlock x:Name="TxtOriginal" 
-                               Text="Original text goes here..." 
-                               TextWrapping="Wrap" 
-                               Foreground="#64748B" 
-                               FontSize="11.5" 
-                               FontStyle="Italic"
-                               LineHeight="16"
-                               Margin="0,0,12,0"
-                               FontFamily="Segoe UI"/>
-                </ScrollViewer>
+                <!-- Original Text Area (câu 1) -->
+                <Border Grid.Row="1" CornerRadius="10" Background="#1B1B26" Padding="12" Margin="0,0,0,10" BorderThickness="1">
+                    <Border.Style>
+                        <Style TargetType="Border">
+                            <Setter Property="BorderBrush" Value="#242434"/>
+                            <Style.Triggers>
+                                <Trigger Property="IsKeyboardFocusWithin" Value="True">
+                                    <Setter Property="BorderBrush" Value="#3B82F6"/>
+                                </Trigger>
+                            </Style.Triggers>
+                        </Style>
+                    </Border.Style>
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBox x:Name="TxtOriginal" 
+                                 Text="Original text goes here..." 
+                                 TextWrapping="Wrap" 
+                                 AcceptsReturn="True"
+                                 VerticalScrollBarVisibility="Auto"
+                                 MaxHeight="80"
+                                 Background="Transparent"
+                                 Foreground="#CBD5E1"
+                                 BorderThickness="0"
+                                 FontSize="11.5" 
+                                 CaretBrush="#3B82F6"
+                                 Margin="0,0,12,0"
+                                 FontFamily="Segoe UI"
+                                 FocusVisualStyle="{x:Null}"
+                                 PreviewKeyDown="TxtOriginal_PreviewKeyDown"/>
+                        <Button x:Name="BtnCopyOriginal" Grid.Column="1" VerticalAlignment="Top" HorizontalAlignment="Right" Width="26" Height="24" Style="{StaticResource ModernButton}" Content="📋" Click="BtnCopyOriginal_Click" Padding="0" Margin="4,0,0,0" ToolTip="Sao chép câu gốc"/>
+                    </Grid>
+                </Border>
 
-                <!-- Target Language Select Pills (Inline Switcher) -->
-                <Grid Grid.Row="2" Margin="0,0,0,10">
+                <!-- Translate Selection Pills (btn dịch) -->
+                <Grid x:Name="GridTranslateSelection" Grid.Row="2" Margin="0,0,0,10">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="Auto"/>
                         <ColumnDefinition Width="*"/>
                     </Grid.ColumnDefinitions>
                     
-                    <TextBlock Text="DỊCH SANG:" Foreground="#475569" FontSize="9" FontWeight="Bold" VerticalAlignment="Center" Margin="0,0,8,0" FontFamily="Segoe UI"/>
+                    <TextBlock x:Name="LblTranslateTo" Text="DỊCH SANG:" Foreground="#475569" FontSize="9" FontWeight="Bold" VerticalAlignment="Center" Margin="0,0,8,0" FontFamily="Segoe UI"/>
                     
                     <StackPanel Grid.Column="1" Orientation="Horizontal">
                         <Button x:Name="BtnLangVi" Style="{StaticResource LangPill}" Content="VI" Click="BtnLangPill_Click" Tag="Vietnamese"/>
@@ -256,22 +283,116 @@
                     </StackPanel>
                 </Grid>
 
-                <!-- Translated Text Area -->
-                <Border Grid.Row="3" CornerRadius="10" Background="#1B1B26" Padding="12" Margin="0,0,0,12" BorderThickness="1" BorderBrush="#242434">
-                    <ScrollViewer MaxHeight="220" VerticalScrollBarVisibility="Auto">
-                        <TextBlock x:Name="TxtTranslated" 
-                                   Text="Đang dịch bằng AI..." 
-                                   TextWrapping="Wrap" 
-                                   Foreground="#F8FAFC" 
-                                   FontSize="13.5" 
-                                   LineHeight="20"
-                                   Margin="0,0,12,0"
-                                   FontFamily="Segoe UI Semibold"/>
-                    </ScrollViewer>
+                <!-- Translated Text Area (câu 2) -->
+                <Border x:Name="BorderTranslated" Grid.Row="3" CornerRadius="10" Background="#1B1B26" Padding="12" Margin="0,0,0,12" BorderThickness="1" BorderBrush="#242434">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <ScrollViewer MaxHeight="220" VerticalScrollBarVisibility="Auto">
+                            <TextBlock x:Name="TxtTranslated" 
+                                       Text="Đang dịch bằng AI..." 
+                                       TextWrapping="Wrap" 
+                                       Foreground="#F8FAFC" 
+                                       FontSize="13.5" 
+                                       LineHeight="20"
+                                       Margin="0,0,12,0"
+                                       FontFamily="Segoe UI Semibold"/>
+                        </ScrollViewer>
+                        <Button x:Name="BtnCopyTranslated" Grid.Column="1" VerticalAlignment="Top" HorizontalAlignment="Right" Width="26" Height="24" Style="{StaticResource ModernButton}" Content="📋" Click="BtnCopyTranslated_Click" Padding="0" Margin="4,0,0,0" ToolTip="Sao chép câu dịch"/>
+                    </Grid>
+                </Border>
+ 
+                <!-- Rewrite Selection Pills (btn rewrite) -->
+                <Grid x:Name="GridRewriteSelection" Grid.Row="4" Margin="0,0,0,10">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    
+                    <TextBlock x:Name="LblRewrite" Text="VIẾT LẠI:" Foreground="#475569" FontSize="9" FontWeight="Bold" VerticalAlignment="Center" Margin="0,0,8,0" FontFamily="Segoe UI"/>
+                    
+                    <StackPanel Grid.Column="1" Orientation="Horizontal">
+                        <Button x:Name="BtnToneFluent" Style="{StaticResource LangPill}" Content="Trôi chảy" Click="BtnTonePill_Click" Tag="Fluent"/>
+                        <Button x:Name="BtnToneFormal" Style="{StaticResource LangPill}" Content="Trang trọng" Click="BtnTonePill_Click" Tag="Formal"/>
+                        <Button x:Name="BtnToneCasual" Style="{StaticResource LangPill}" Content="Thân mật" Click="BtnTonePill_Click" Tag="Casual"/>
+                        <Button x:Name="BtnToneConcise" Style="{StaticResource LangPill}" Content="Ngắn gọn" Click="BtnTonePill_Click" Tag="Concise"/>
+                    </StackPanel>
+                </Grid>
+
+                <!-- Rewritten Text Area (câu 3) -->
+                <Border x:Name="BorderRewritten" Grid.Row="5" CornerRadius="10" Background="#1B1B26" Padding="12" Margin="0,0,0,12" BorderThickness="1" BorderBrush="#242434" Visibility="Collapsed">
+                    <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="*"/>
+                        </Grid.RowDefinitions>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock x:Name="LblRewrittenHeader" Grid.Row="0" Grid.ColumnSpan="2" Text="BẢN VIẾT LẠI (TRÔI CHẢY):" Foreground="#475569" FontSize="9" FontWeight="Bold" Margin="0,0,0,8" FontFamily="Segoe UI"/>
+                        <ScrollViewer Grid.Row="1" MaxHeight="220" VerticalScrollBarVisibility="Auto">
+                            <TextBlock x:Name="TxtRewritten" 
+                                       Text="Đang viết lại câu dịch bằng AI..." 
+                                       TextWrapping="Wrap" 
+                                       Foreground="#F8FAFC" 
+                                       FontSize="13.5" 
+                                       LineHeight="20"
+                                       Margin="0,0,12,0"
+                                       FontFamily="Segoe UI Semibold"/>
+                        </ScrollViewer>
+                        <Button x:Name="BtnCopyRewritten" Grid.Row="1" Grid.Column="1" VerticalAlignment="Top" HorizontalAlignment="Right" Width="26" Height="24" Style="{StaticResource ModernButton}" Content="📋" Click="BtnCopyRewritten_Click" Padding="0" Margin="4,0,0,0" ToolTip="Sao chép câu viết lại"/>
+                    </Grid>
                 </Border>
 
+                <!-- Rewrite Translate Selection Pills (cho phép dịch câu viết lại sang ngôn ngữ khác) -->
+                <Grid x:Name="GridRewriteTranslateSelection" Grid.Row="6" Margin="0,0,0,10" Visibility="Collapsed">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    
+                    <TextBlock x:Name="LblRewriteTranslateTo" Text="DỊCH SANG:" Foreground="#475569" FontSize="9" FontWeight="Bold" VerticalAlignment="Center" Margin="0,0,8,0" FontFamily="Segoe UI"/>
+                    
+                    <StackPanel Grid.Column="1" Orientation="Horizontal">
+                        <Button x:Name="BtnRewriteLangVi" Style="{StaticResource LangPill}" Content="VI" Click="BtnRewriteLangPill_Click" Tag="Vietnamese"/>
+                        <Button x:Name="BtnRewriteLangEn" Style="{StaticResource LangPill}" Content="EN" Click="BtnRewriteLangPill_Click" Tag="English"/>
+                        <Button x:Name="BtnRewriteLangJa" Style="{StaticResource LangPill}" Content="JA" Click="BtnRewriteLangPill_Click" Tag="Japanese"/>
+                        <Button x:Name="BtnRewriteLangKo" Style="{StaticResource LangPill}" Content="KO" Click="BtnRewriteLangPill_Click" Tag="Korean"/>
+                        <Button x:Name="BtnRewriteLangZh" Style="{StaticResource LangPill}" Content="ZH" Click="BtnRewriteLangPill_Click" Tag="Chinese"/>
+                    </StackPanel>
+                </Grid>
+
+                <!-- Rewrite Translated Text Area (câu dịch của câu viết lại) -->
+                <Border x:Name="BorderRewriteTranslated" Grid.Row="7" CornerRadius="10" Background="#1B1B26" Padding="12" Margin="0,0,0,12" BorderThickness="1" BorderBrush="#242434" Visibility="Collapsed">
+                    <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="*"/>
+                        </Grid.RowDefinitions>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock x:Name="LblRewriteTranslatedHeader" Grid.Row="0" Grid.ColumnSpan="2" Text="BẢN DỊCH CỦA CÂU VIẾT LẠI (TIẾNG ANH):" Foreground="#475569" FontSize="9" FontWeight="Bold" Margin="0,0,0,8" FontFamily="Segoe UI"/>
+                        <ScrollViewer Grid.Row="1" MaxHeight="220" VerticalScrollBarVisibility="Auto">
+                            <TextBlock x:Name="TxtRewriteTranslated" 
+                                       Text="Đang dịch..." 
+                                       TextWrapping="Wrap" 
+                                       Foreground="#F8FAFC" 
+                                       FontSize="13.5" 
+                                       LineHeight="20"
+                                       Margin="0,0,12,0"
+                                       FontFamily="Segoe UI Semibold"/>
+                        </ScrollViewer>
+                        <Button x:Name="BtnCopyRewriteTranslated" Grid.Row="1" Grid.Column="1" VerticalAlignment="Top" HorizontalAlignment="Right" Width="26" Height="24" Style="{StaticResource ModernButton}" Content="📋" Click="BtnCopyRewriteTranslated_Click" Padding="0" Margin="4,0,0,0" ToolTip="Sao chép bản dịch"/>
+                    </Grid>
+                </Border>
+ 
                 <!-- Footer and Operations -->
-                <Grid Grid.Row="4">
+                <Grid Grid.Row="8">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*"/>
                         <ColumnDefinition Width="Auto"/>
@@ -291,9 +412,8 @@
                     <!-- Actions Panel -->
                     <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right">
                         <Button x:Name="BtnRetry" Style="{StaticResource ModernButton}" Click="BtnRetry_Click" Margin="0,0,6,0" Content="🔄 Retry" Padding="10,5" Visibility="Collapsed"/>
-                        <Button Style="{StaticResource ModernButton}" Click="BtnCopy_Click" Margin="0,0,6,0" Content="📋 Copy" Padding="10,5"/>
-                        <Button Style="{StaticResource ModernButton}" Click="BtnSettings_Click" Margin="0,0,6,0" Content="⚙️ Setup" Padding="10,5"/>
-                        <Button Style="{StaticResource ModernButton}" Click="BtnClose_Click" Content="✕ Close" Padding="10,5"/>
+                        <Button x:Name="BtnSettings" Style="{StaticResource ModernButton}" Click="BtnSettings_Click" Margin="0,0,6,0" Content="⚙️ Setup" Padding="10,5"/>
+                        <Button x:Name="BtnClose" Style="{StaticResource ModernButton}" Click="BtnClose_Click" Content="✕ Close" Padding="10,5"/>
                     </StackPanel>
                 </Grid>
             </Grid>

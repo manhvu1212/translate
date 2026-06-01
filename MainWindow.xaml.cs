@@ -243,7 +243,7 @@ namespace AITranslator
             }
             else
             {
-                _keyboardHook?.Unregister();
+                _keyboardHook?.UnregisterAll();
                 _clipboardManager?.StopListening();
             }
         }
@@ -252,20 +252,39 @@ namespace AITranslator
         {
             if (!_isEnabled) return;
 
-            // 1. Configure Hotkey
+            // 1. Configure Hotkeys
             if (_keyboardHook != null)
             {
+                // Register Quick Translate Hotkey (ID 9000)
                 if (_settings.HotkeyModifiers > 0 || _settings.HotkeyKey > 0)
                 {
-                    bool success = _keyboardHook.Register(_settings.HotkeyModifiers, _settings.HotkeyKey);
+                    bool success = _keyboardHook.Register(9000, _settings.HotkeyModifiers, _settings.HotkeyKey);
                     if (!success)
                     {
-                        MessageBox.Show($"Không thể đăng ký phím tắt {_settings.HotkeyText}. Phím này có thể đang bị một ứng dụng khác chiếm dụng.", "Lỗi đăng ký Phim tắt", MessageBoxButton.OK, MessageBoxImage.Warning);
+                        string msg = string.Format(LocalizationManager.Get("MsgHotkeyConflict", _settings.TargetLanguage), _settings.HotkeyText);
+                        string title = LocalizationManager.Get("MsgHotkeyConflictTitle", _settings.TargetLanguage);
+                        MessageBox.Show(msg, title, MessageBoxButton.OK, MessageBoxImage.Warning);
                     }
                 }
                 else
                 {
-                    _keyboardHook.Unregister();
+                    _keyboardHook.Unregister(9000);
+                }
+
+                // Register Rewrite Hotkey (ID 9001)
+                if (_settings.RewriteHotkeyModifiers > 0 || _settings.RewriteHotkeyKey > 0)
+                {
+                    bool success = _keyboardHook.Register(9001, _settings.RewriteHotkeyModifiers, _settings.RewriteHotkeyKey);
+                    if (!success)
+                    {
+                        string msg = string.Format(LocalizationManager.Get("MsgHotkeyConflict", _settings.TargetLanguage), _settings.RewriteHotkeyText);
+                        string title = LocalizationManager.Get("MsgHotkeyConflictTitle", _settings.TargetLanguage);
+                        MessageBox.Show(msg, title, MessageBoxButton.OK, MessageBoxImage.Warning);
+                    }
+                }
+                else
+                {
+                    _keyboardHook.Unregister(9001);
                 }
             }
 
@@ -273,13 +292,13 @@ namespace AITranslator
             _settings.ApplyStartWithWindowsState();
         }
 
-        private async void OnHotkeyPressed()
+        private async void OnHotkeyPressed(int id)
         {
             if (!_isEnabled) return;
-            await TriggerTranslationProcess();
+            await TriggerTranslationProcess(id);
         }
 
-        private async Task TriggerTranslationProcess()
+        private async Task TriggerTranslationProcess(int hotkeyId = 9000)
         {
             // Close any existing active popups
             Dispatcher.Invoke(() =>
@@ -290,17 +309,21 @@ namespace AITranslator
                 }
             });
 
-            // Simulate Ctrl+C to get selected text
-            string text = await ClipboardManager.GetSelectedTextAsync(_settings.HotkeyKey);
+            // Simulate Ctrl+C to get selected text.
+            // Select the trigger key based on which hotkey was pressed.
+            uint triggerKey = hotkeyId == 9001 ? _settings.RewriteHotkeyKey : _settings.HotkeyKey;
+            string text = await ClipboardManager.GetSelectedTextAsync(triggerKey);
             text = text?.Trim() ?? string.Empty;
 
             if (!string.IsNullOrEmpty(text))
             {
-                Dispatcher.Invoke(() => ShowPopup(text));
+                // Show popup with mode determined by hotkeyId
+                bool startInRewriteMode = (hotkeyId == 9001);
+                Dispatcher.Invoke(() => ShowPopup(text, startInRewriteMode));
             }
         }
 
-        private void ShowPopup(string text)
+        private void ShowPopup(string text, bool startInRewriteMode = false)
         {
             // Close active popup if open
             if (_activePopup != null && _activePopup.IsVisible)
@@ -308,7 +331,7 @@ namespace AITranslator
                 _activePopup.Close();
             }
 
-            _activePopup = new FloatingPopup(text, _settings);
+            _activePopup = new FloatingPopup(text, _settings, startInRewriteMode);
             _activePopup.SettingsRequested += ShowSettingsWindow;
             _activePopup.Show();
             _activePopup.Activate();

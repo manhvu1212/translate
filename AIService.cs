@@ -79,6 +79,72 @@ namespace AITranslator
             return result;
         }
 
+        public async Task<string> RewriteAsync(string text, string tone, AppSettings settings)
+        {
+            if (string.IsNullOrWhiteSpace(text))
+                return "Vui lòng bôi đen văn bản cần viết lại.";
+
+            string provider = settings.SelectedProvider;
+            string model = provider switch
+            {
+                "OpenAI" => settings.OpenAIModel,
+                "Claude" => settings.ClaudeModel,
+                "Gemini" => settings.GeminiModel,
+                "Groq" => settings.GroqModel,
+                _ => ""
+            };
+
+            // Serve a previously rewritten result instantly (no API call)
+            string cacheKey = $"Rewrite|{provider}|{model}|{tone}|{text}";
+            if (_translationCache.TryGetValue(cacheKey, out string? cached))
+            {
+                return cached;
+            }
+
+            // System prompt for high-quality rewriting based on tone
+            string toneDirective = tone switch
+            {
+                "Formal" => "formal, polite, professional, and suitable for business or official correspondence",
+                "Casual" => "casual, informal, friendly, and natural, suitable for everyday conversations",
+                "Concise" => "concise, brief, and to the point, removing redundant words while keeping the core meaning",
+                _ => "fluent, coherent, and natural" // Fluent / Default
+            };
+
+            string prompt = $"You are a professional editor and writer.\n\n" +
+                            $"Directives:\n" +
+                            $"- Rewrite/paraphrase the input text to make it {toneDirective}.\n" +
+                            $"- Keep the original language of the text. Do NOT translate it to another language under any circumstances.\n" +
+                            $"- Return ONLY the rewritten text, without any introduction, explanations, quotes, markdown wrappers, or extra notes.\n" +
+                            $"- Keep formatting and line breaks identical to the source.\n\n" +
+                            $"Text to rewrite:\n{text}";
+
+            string result;
+            try
+            {
+                result = provider switch
+                {
+                    "Gemini" => await TranslateWithGeminiAsync(prompt, model, settings.GeminiApiKey),
+                    "OpenAI" => await TranslateWithOpenAIAsync(prompt, model, settings.OpenAIApiKey),
+                    "Claude" => await TranslateWithClaudeAsync(prompt, model, settings.ClaudeApiKey),
+                    "Groq" => await TranslateWithGroqAsync(prompt, model, settings.GroqApiKey),
+                    _ => $"Lỗi: Nhà cung cấp AI '{provider}' không được hỗ trợ."
+                };
+            }
+            catch (Exception ex)
+            {
+                return $"Lỗi kết nối API ({provider}): {ex.Message}\n\nHãy kiểm tra lại API Key và kết nối mạng của bạn.";
+            }
+
+            // Only cache successful rewrites, never error messages.
+            if (!result.StartsWith("Lỗi"))
+            {
+                CacheTranslation(cacheKey, result);
+            }
+
+            return result;
+        }
+
+
         private static void CacheTranslation(string key, string value)
         {
             // Crude bound so a long-running tray session doesn't grow unbounded.

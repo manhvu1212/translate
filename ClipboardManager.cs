@@ -194,11 +194,13 @@ namespace AITranslator
             {
                 System.Diagnostics.Debug.WriteLine($"Error during clipboard get selected text: {ex.Message}");
             }
-
-            // 5. Restore the original clipboard in the background. The popup only needs
-            // the captured text, so we return immediately instead of blocking on the
-            // (potentially slow) clipboard flush — this makes the window appear faster.
-            _ = RestoreClipboardAsync(originalData);
+            finally
+            {
+                // 5. Restore the original clipboard in the background. The popup only needs
+                // the captured text, so we return immediately instead of blocking on the
+                // (potentially slow) clipboard flush — this makes the window appear faster.
+                _ = RestoreClipboardAsync(originalData);
+            }
 
             return selectedText;
         }
