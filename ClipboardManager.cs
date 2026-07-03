@@ -2,6 +2,8 @@ using System;
 using System.Runtime.InteropServices;
 using System.Threading.Tasks;
 using Clipboard = System.Windows.Clipboard;
+using DataFormats = System.Windows.DataFormats;
+using DataObject = System.Windows.DataObject;
 using IDataObject = System.Windows.IDataObject;
 
 namespace AITranslator
@@ -78,23 +80,24 @@ namespace AITranslator
             SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<INPUT>());
         }
 
+        // Completion of the previous capture's background restore. The next capture
+        // must wait for it: snapshotting while the previous captured text is still
+        // on the clipboard would record THAT text as the "original" content and
+        // leak it into the clipboard permanently.
+        private static Task _pendingRestore = Task.CompletedTask;
+
         public static async Task<string> GetSelectedTextAsync(uint triggerKey = 0)
         {
+            try { await _pendingRestore; } catch { /* restore failures are logged there */ }
+
             string selectedText = string.Empty;
-            IDataObject? originalData = null;
+            ClipboardSnapshot? backup = null;
             bool clipboardChanged = false;
 
             try
             {
                 // 1. Backup original clipboard content so it can be restored afterwards.
-                try
-                {
-                    originalData = Clipboard.GetDataObject();
-                }
-                catch (Exception ex)
-                {
-                    System.Diagnostics.Debug.WriteLine($"Failed to backup clipboard: {ex.Message}");
-                }
+                backup = SnapshotClipboard();
 
                 // 2. Release modifier keys first to prevent command pollution (e.g. Alt + Ctrl + C).
                 //    A single SendInput batch guarantees ordering without artificial delays.
@@ -167,22 +170,125 @@ namespace AITranslator
                 // so we return immediately instead of blocking on the clipboard flush.
                 if (clipboardChanged)
                 {
-                    _ = RestoreClipboardAsync(originalData);
+                    _pendingRestore = RestoreClipboardAsync(backup);
                 }
             }
 
             return selectedText;
         }
 
-        private static async Task RestoreClipboardAsync(IDataObject? originalData)
+        // Formats worth preserving across the simulated Ctrl+C.
+        private static readonly string[] SnapshotFormats =
         {
-            if (originalData == null) return;
+            DataFormats.UnicodeText,
+            DataFormats.Rtf,
+            DataFormats.Html,
+            DataFormats.FileDrop,
+            DataFormats.Bitmap,
+        };
 
+        // Well-known clipboard flags: clipboard history (Win+V) and other clipboard
+        // monitors skip content carrying them. Applied to our restores so putting
+        // the original content back does not create duplicate history entries.
+        private const string FmtCanIncludeInClipboardHistory = "CanIncludeInClipboardHistory";
+        private const string FmtExcludeFromMonitoring = "ExcludeClipboardContentFromMonitorProcessing";
+
+        private sealed class ClipboardSnapshot
+        {
+            public IDataObject? Data;   // materialized payloads, or null if none could be copied
+            public bool WasEmpty;       // the clipboard held no formats at all
+        }
+
+        /// <summary>
+        /// Copies the clipboard's current payloads into a fresh, self-contained
+        /// DataObject. The original data object must NEVER be put back on the
+        /// clipboard: it is an OLE proxy, and re-setting a proxy wraps the clipboard
+        /// in one more forwarding layer per capture. After enough hotkey uses every
+        /// clipboard read recurses through all those layers of COM calls, freezing
+        /// the UI for minutes (and historically crashing the app with 0xc000041d).
+        /// </summary>
+        private static ClipboardSnapshot SnapshotClipboard()
+        {
+            var result = new ClipboardSnapshot();
             try
             {
-                // Small delay to ensure the Windows clipboard queue is clear.
-                await Task.Delay(50);
-                Clipboard.SetDataObject(originalData, false);
+                IDataObject? source = Clipboard.GetDataObject();
+                string[] formats;
+                try { formats = source?.GetFormats() ?? Array.Empty<string>(); }
+                catch { formats = Array.Empty<string>(); }
+
+                result.WasEmpty = formats.Length == 0;
+                if (source == null || result.WasEmpty) return result;
+
+                var snapshot = new DataObject();
+                bool hasData = false;
+
+                foreach (string format in SnapshotFormats)
+                {
+                    try
+                    {
+                        if (!source.GetDataPresent(format)) continue;
+                        object? data = source.GetData(format);
+                        if (data == null) continue;
+
+                        snapshot.SetData(format, data);
+                        hasData = true;
+                    }
+                    catch (Exception ex)
+                    {
+                        // A single unreadable format must not break the backup.
+                        System.Diagnostics.Debug.WriteLine($"Skipping clipboard format '{format}': {ex.Message}");
+                    }
+                }
+
+                if (hasData)
+                {
+                    // Hide the restore from clipboard history/monitors: the original
+                    // content is already in the history, re-adding it duplicates it.
+                    snapshot.SetData(FmtCanIncludeInClipboardHistory, new System.IO.MemoryStream(new byte[4]));
+                    snapshot.SetData(FmtExcludeFromMonitoring, new System.IO.MemoryStream(new byte[4]));
+                    result.Data = snapshot;
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Failed to snapshot clipboard: {ex.Message}");
+            }
+            return result;
+        }
+
+        private static async Task RestoreClipboardAsync(ClipboardSnapshot? backup)
+        {
+            try
+            {
+                // Some applications write the clipboard more than once for a single
+                // Ctrl+C. Restoring between those writes would let the later write
+                // re-deposit the captured text. Wait until the sequence number stays
+                // stable for one interval (bounded to ~220ms).
+                uint seq = GetClipboardSequenceNumber();
+                for (int i = 0; i < 10; i++)
+                {
+                    await Task.Delay(20);
+                    uint now = GetClipboardSequenceNumber();
+                    if (now == seq) break;
+                    seq = now;
+                }
+
+                if (backup?.Data != null)
+                {
+                    // copy:true flushes our materialized snapshot onto the clipboard,
+                    // fully detached from any other application's data object.
+                    Clipboard.SetDataObject(backup.Data, true);
+                }
+                else if (backup?.WasEmpty == true)
+                {
+                    // The clipboard was empty before the capture — return it to empty,
+                    // otherwise the captured text lingers and the NEXT capture would
+                    // record it as the "original" content and keep restoring it forever.
+                    Clipboard.Clear();
+                }
+                // else: the original content only had formats we cannot materialize;
+                // leave the clipboard as is rather than destroy what we cannot restore.
             }
             catch (Exception ex)
             {
