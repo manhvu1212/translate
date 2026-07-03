@@ -37,8 +37,6 @@ namespace AITranslator
         public uint RewriteHotkeyKey { get; set; } = 0x57; // W key (virtual key code)
         public string RewriteHotkeyText { get; set; } = "Alt + W";
 
-        public bool EnableDoubleCopy { get; set; } = true;
-        
         public bool StartWithWindows { get; set; } = false;
 
         public static AppSettings Load()

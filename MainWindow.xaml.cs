@@ -16,15 +16,18 @@ namespace AITranslator
 
         private AppSettings _settings = null!;
         private KeyboardHook? _keyboardHook;
-        private ClipboardManager? _clipboardManager;
-        
+
         // System Tray Components
         private NotifyIcon? _notifyIcon;
         private IntPtr _hIcon = IntPtr.Zero;
-        
+
         private bool _isEnabled = true;
         private FloatingPopup? _activePopup;
         private SettingsWindow? _activeSettingsWindow;
+
+        // Prevents overlapping capture attempts when the hotkey is spammed: two
+        // concurrent Ctrl+C simulations would fight over the shared clipboard.
+        private bool _isCapturing = false;
 
 
 
@@ -54,8 +57,6 @@ namespace AITranslator
                 // Initialize background listeners
                 _keyboardHook = new KeyboardHook(this);
                 _keyboardHook.HotkeyPressed += OnHotkeyPressed;
-
-                _clipboardManager = new ClipboardManager(this);
 
                 // Initialize System Tray Icon
                 SetupTrayIcon();
@@ -87,13 +88,17 @@ namespace AITranslator
 
             // Create context menu
             var contextMenu = new ContextMenuStrip();
-            
-            var itemTranslate = new ToolStripMenuItem("Dịch nhanh (Alt+Q)", null, async (s, e) => await TriggerTranslationProcess());
-            var itemToggle = new ToolStripMenuItem("Bật tính năng dịch", null, (s, e) => ToggleState());
+
+            var itemTranslate = new ToolStripMenuItem("Dịch nhanh (Alt+Q)", null, async (s, e) =>
+            {
+                try { await TriggerTranslationProcess(); }
+                catch (Exception ex) { App.LogException(ex, "TrayQuickTranslate"); }
+            });
+            var itemToggle = new ToolStripMenuItem("Bật tính năng dịch", null, (s, e) => SafeTrayAction(ToggleState));
             itemToggle.Checked = _isEnabled;
-            
-            var itemSettings = new ToolStripMenuItem("Cấu hình...", null, (s, e) => ShowSettingsWindow());
-            var itemExit = new ToolStripMenuItem("Thoát", null, (s, e) => Application.Current.Shutdown());
+
+            var itemSettings = new ToolStripMenuItem("Cấu hình...", null, (s, e) => SafeTrayAction(ShowSettingsWindow));
+            var itemExit = new ToolStripMenuItem("Thoát", null, (s, e) => SafeTrayAction(() => Application.Current?.Shutdown()));
 
             contextMenu.Items.Add(itemTranslate);
             contextMenu.Items.Add(itemToggle);
@@ -104,19 +109,27 @@ namespace AITranslator
             _notifyIcon.ContextMenuStrip = contextMenu;
 
             // Double click tray icon opens settings
-            _notifyIcon.DoubleClick += (s, e) => ShowSettingsWindow();
+            _notifyIcon.DoubleClick += (s, e) => SafeTrayAction(ShowSettingsWindow);
+        }
+
+        // Tray handlers execute inside WinForms' NativeWindow callback: an exception
+        // escaping there triggers WinForms' ThreadExceptionDialog, whose window-handle
+        // creation can itself fail and kill the process (0xc000041d). Contain them.
+        private static void SafeTrayAction(Action action)
+        {
+            try
+            {
+                action();
+            }
+            catch (Exception ex)
+            {
+                App.LogException(ex, "TrayHandler");
+            }
         }
 
         private void UpdateTrayIconState()
         {
             if (_notifyIcon == null) return;
-
-            // Clean up old icon handle if it exists
-            if (_hIcon != IntPtr.Zero)
-            {
-                DestroyIcon(_hIcon);
-                _hIcon = IntPtr.Zero;
-            }
 
             using (Bitmap bitmap = new Bitmap(32, 32))
             {
@@ -191,9 +204,22 @@ namespace AITranslator
                         g.DrawString("文", font2, brush2, new RectangleF(10, 10.5f, 21, 21), sf);
                     }
                 }
-                
-                _hIcon = bitmap.GetHicon();
-                _notifyIcon.Icon = System.Drawing.Icon.FromHandle(_hIcon);
+
+                // Swap in the new icon BEFORE destroying the old handle, so the tray
+                // never points at a destroyed HICON; then release both the old managed
+                // wrapper (Icon.FromHandle does not own the handle) and the old handle.
+                IntPtr newHIcon = bitmap.GetHicon();
+                var oldIcon = _notifyIcon.Icon;
+                IntPtr oldHIcon = _hIcon;
+
+                _notifyIcon.Icon = System.Drawing.Icon.FromHandle(newHIcon);
+                _hIcon = newHIcon;
+
+                oldIcon?.Dispose();
+                if (oldHIcon != IntPtr.Zero)
+                {
+                    DestroyIcon(oldHIcon);
+                }
             }
         }
 
@@ -244,7 +270,6 @@ namespace AITranslator
             else
             {
                 _keyboardHook?.UnregisterAll();
-                _clipboardManager?.StopListening();
             }
         }
 
@@ -300,45 +325,53 @@ namespace AITranslator
 
         private async Task TriggerTranslationProcess(int hotkeyId = 9000)
         {
-            // Close any existing active popups
-            Dispatcher.Invoke(() =>
-            {
-                if (_activePopup != null && _activePopup.IsVisible)
-                {
-                    _activePopup.Close();
-                }
-            });
+            // Ignore triggers while a capture is already running (hotkey spam).
+            if (_isCapturing) return;
+            _isCapturing = true;
 
-            // Simulate Ctrl+C to get selected text.
-            // Select the trigger key based on which hotkey was pressed.
-            uint triggerKey = hotkeyId == 9001 ? _settings.RewriteHotkeyKey : _settings.HotkeyKey;
-            string text = await ClipboardManager.GetSelectedTextAsync(triggerKey);
-            text = text?.Trim() ?? string.Empty;
+            string text;
+            try
+            {
+                // Hide the popup so the simulated Ctrl+C targets the user's window.
+                _activePopup?.HideForCapture();
+
+                // Simulate Ctrl+C to get selected text.
+                // Select the trigger key based on which hotkey was pressed.
+                uint triggerKey = hotkeyId == 9001 ? _settings.RewriteHotkeyKey : _settings.HotkeyKey;
+                text = (await ClipboardManager.GetSelectedTextAsync(triggerKey))?.Trim() ?? string.Empty;
+            }
+            finally
+            {
+                _isCapturing = false;
+            }
 
             if (!string.IsNullOrEmpty(text))
             {
                 // Show popup with mode determined by hotkeyId
-                bool startInRewriteMode = (hotkeyId == 9001);
-                Dispatcher.Invoke(() => ShowPopup(text, startInRewriteMode));
+                ShowPopup(text, startInRewriteMode: hotkeyId == 9001);
             }
         }
 
         private void ShowPopup(string text, bool startInRewriteMode = false)
         {
-            // Close active popup if open
-            if (_activePopup != null && _activePopup.IsVisible)
+            // Reuse a single popup window across triggers instead of creating a new
+            // one per translation (less HWND churn, faster display).
+            if (_activePopup == null)
             {
-                _activePopup.Close();
+                _activePopup = new FloatingPopup(_settings);
+                _activePopup.SettingsRequested += ShowSettingsWindow;
+                _activePopup.Closed += (s, e) => _activePopup = null;
             }
 
-            _activePopup = new FloatingPopup(text, _settings, startInRewriteMode);
-            _activePopup.SettingsRequested += ShowSettingsWindow;
-            _activePopup.Show();
-            _activePopup.Activate();
+            _activePopup.Present(text, startInRewriteMode);
         }
 
         private void ShowSettingsWindow()
         {
+            // Never open new UI while the application is going down (a tray click can
+            // still arrive during shutdown).
+            if (Application.Current == null || Application.Current.Dispatcher.HasShutdownStarted) return;
+
             // If already open, focus it
             if (_activeSettingsWindow != null && _activeSettingsWindow.IsVisible)
             {
@@ -347,7 +380,7 @@ namespace AITranslator
             }
 
             _activeSettingsWindow = new SettingsWindow();
-            
+
             // Apply settings if user saves them
             bool? result = _activeSettingsWindow.ShowDialog();
             if (result == true)
@@ -355,6 +388,10 @@ namespace AITranslator
                 // Reload settings and re-apply
                 _settings = AppSettings.Load();
                 ApplySettings();
+
+                // The popup caches the settings reference; close it so the next
+                // trigger recreates it with the freshly loaded settings.
+                _activePopup?.Close();
             }
         }
 
@@ -366,8 +403,7 @@ namespace AITranslator
         private void CleanUp()
         {
             _keyboardHook?.Dispose();
-            _clipboardManager?.Dispose();
-            
+
             if (_notifyIcon != null)
             {
                 _notifyIcon.Visible = false;

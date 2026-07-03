@@ -1,8 +1,7 @@
-﻿<Application x:Class="AITranslator.App"
+<Application x:Class="AITranslator.App"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-             xmlns:local="clr-namespace:AITranslator"
-             StartupUri="MainWindow.xaml">
+             xmlns:local="clr-namespace:AITranslator">
     <Application.Resources>
          
     </Application.Resources>

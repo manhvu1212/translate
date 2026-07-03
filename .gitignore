@@ -9,3 +9,5 @@ obj/
 *.userosscache
 *.sln.docstates
 build_log.txt
+# Build logs
+build_log.txt

@@ -254,10 +254,10 @@ namespace AITranslator
             try
             {
                 var aiService = new AIService();
-                var translateResult = await Task.Run(() => aiService.TranslateAsync(testText, testSettings));
+                var translateResult = await aiService.TranslateAsync(testText, testSettings);
                 string result = translateResult.Text;
 
-                bool isError = result.StartsWith("Lỗi") || result.StartsWith("Error");
+                bool isError = translateResult.IsError;
                 if (isError)
                 {
                     // Clean up error message for display
@@ -315,8 +315,6 @@ namespace AITranslator
             _settings.RewriteHotkeyModifiers = _rewriteHotkeyModifiers;
             _settings.RewriteHotkeyKey = _rewriteHotkeyKey;
             _settings.RewriteHotkeyText = _rewriteHotkeyText;
-
-            _settings.EnableDoubleCopy = false; // Disabled
 
             // Save Startup Setting
             _settings.StartWithWindows = ChkStartWithWindows.IsChecked == true;

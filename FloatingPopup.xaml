@@ -14,8 +14,7 @@
         AllowsTransparency="True"
         Background="Transparent"
         Topmost="True"
-        ShowInTaskbar="False"
-        Loaded="Window_Loaded">
+        ShowInTaskbar="False">
     
     <Window.Resources>
         <!-- Modern Rounded Button Style with Hover and Press States -->

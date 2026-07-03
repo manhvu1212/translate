@@ -1,4 +1,5 @@
 using System;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
@@ -10,7 +11,7 @@ namespace AITranslator
 {
     public partial class FloatingPopup : System.Windows.Window
     {
-        private string _originalText;
+        private string _originalText = string.Empty;
         private readonly AppSettings _settings;
         private readonly AIService _aiService;
         private bool _isClosing = false;
@@ -22,46 +23,173 @@ namespace AITranslator
         private string _currentTone = "Fluent"; // Fluent, Formal, Casual, Concise
         private string _rewriteTargetLanguage = "English";
 
+        // Cancels the in-flight AI request when the popup is hidden/closed or a new
+        // request supersedes it, so stale responses never touch the UI.
+        private CancellationTokenSource? _cts;
+
+        // Successful results per output box (null = box holds a placeholder or error).
+        // UI decisions are driven by these fields instead of comparing display text.
+        private string? _translatedText;
+        private string? _rewrittenText;
+        private string? _rewriteTranslatedText;
+
+        // Localization keys of the placeholder currently shown in each output box
+        // (null = box holds real content or an error). LocalizeUI re-renders these
+        // when the target language changes.
+        private string? _translatedPlaceholderKey;
+        private string? _rewrittenPlaceholderKey;
+        private string? _rewriteTranslatedPlaceholderKey;
+
+        // Pill colors are constant — create and freeze them once instead of running
+        // BrushConverter on every click.
+        private static readonly Brush PillInactiveBg = CreateFrozenBrush("#1E1E2C");
+        private static readonly Brush PillInactiveFg = CreateFrozenBrush("#64748B");
+        private static readonly Brush PillActiveBg = CreateFrozenBrush("#3B82F6");
+        private static readonly Brush PillActiveFg = Brushes.White;
+
+        private static Brush CreateFrozenBrush(string hex)
+        {
+            var brush = (SolidColorBrush)new BrushConverter().ConvertFromString(hex)!;
+            brush.Freeze();
+            return brush;
+        }
+
         public event Action? SettingsRequested;
 
-        public FloatingPopup(string originalText, AppSettings settings, bool startInRewriteMode = false)
+        public FloatingPopup(AppSettings settings)
         {
             InitializeComponent();
-            _originalText = originalText;
             _settings = settings;
             _aiService = new AIService();
-            _rewriteTargetLanguage = _settings.TargetLanguage;
-
-            _currentMode = startInRewriteMode ? PopupMode.Rewrite : PopupMode.Translate;
-
-            TxtOriginal.Text = _originalText;
-            
-            // Set dynamic localized loading text
-            if (_currentMode == PopupMode.Rewrite)
-            {
-                TxtRewritten.Text = LocalizationManager.Get("Rewriting", _settings.TargetLanguage);
-            }
-            else
-            {
-                TxtTranslated.Text = LocalizationManager.Get("Translating", _settings.TargetLanguage);
-            }
-            
-            // Localize the UI controls
-            LocalizeUI();
-            
-            // Set initial visibility
-            UpdateVisibilityForMode();
-            
-            // Set status label based on settings
-            UpdateStatusLabel();
-            SetStatusColor(Brushes.Gold); // Yellow dot for loading
-            
-            // Highlight active target language/tone pill
-            UpdatePillHighlights();
 
             // Esc closes the popup.
             this.PreviewKeyDown += FloatingPopup_PreviewKeyDown;
         }
+
+        /// <summary>
+        /// Shows the popup (reusing the same window across triggers) with fresh state
+        /// and kicks off the translation/rewrite.
+        /// </summary>
+        public void Present(string text, bool startInRewriteMode = false)
+        {
+            PrepareFor(text, startInRewriteMode);
+
+            if (!IsVisible)
+            {
+                Show();
+            }
+            Activate();
+            UpdateLayout();
+            PositionPopupNearCursor();
+
+            _ = PerformTranslationAsync();
+        }
+
+        /// <summary>
+        /// Hides the popup immediately (no fade) so it does not receive the simulated
+        /// Ctrl+C during selection capture, and cancels any in-flight request.
+        /// </summary>
+        public void HideForCapture()
+        {
+            _cts?.Cancel();
+            if (IsVisible)
+            {
+                Hide();
+            }
+        }
+
+        private void PrepareFor(string text, bool startInRewriteMode)
+        {
+            _originalText = text;
+            _currentMode = startInRewriteMode ? PopupMode.Rewrite : PopupMode.Translate;
+            _currentTone = "Fluent";
+            _rewriteTargetLanguage = _settings.TargetLanguage;
+            _userMoved = false;
+            _initialMousePosition = null;
+            _isClosing = false;
+
+            // Release any leftover fade-out animation hold and restore full opacity.
+            BeginAnimation(OpacityProperty, null);
+            Opacity = 1.0;
+
+            TxtOriginal.Text = _originalText;
+
+            // Reset all output boxes.
+            _translatedText = _rewrittenText = _rewriteTranslatedText = null;
+            _translatedPlaceholderKey = _rewrittenPlaceholderKey = _rewriteTranslatedPlaceholderKey = null;
+            TxtTranslated.Text = string.Empty;
+            TxtRewritten.Text = string.Empty;
+            TxtRewriteTranslated.Text = string.Empty;
+
+            // Set dynamic localized loading text.
+            if (_currentMode == PopupMode.Rewrite)
+            {
+                SetRewrittenPlaceholder("Rewriting");
+            }
+            else
+            {
+                SetTranslatedPlaceholder("Translating");
+            }
+
+            // Localize the UI controls.
+            LocalizeUI();
+
+            // Set initial visibility.
+            UpdateVisibilityForMode();
+
+            // Set status label based on settings.
+            UpdateStatusLabel();
+            SetStatusColor(Brushes.Gold); // Yellow dot for loading
+
+            // Highlight active target language/tone pill.
+            UpdatePillHighlights();
+        }
+
+        // ----- Output box state helpers -------------------------------------------------
+
+        private void SetTranslatedPlaceholder(string key)
+        {
+            _translatedPlaceholderKey = key;
+            _translatedText = null;
+            TxtTranslated.Text = LocalizationManager.Get(key, _settings.TargetLanguage);
+        }
+
+        private void SetTranslatedResult(string text, bool isError)
+        {
+            _translatedPlaceholderKey = null;
+            _translatedText = (isError || string.IsNullOrEmpty(text)) ? null : text;
+            TxtTranslated.Text = text;
+        }
+
+        private void SetRewrittenPlaceholder(string key)
+        {
+            _rewrittenPlaceholderKey = key;
+            _rewrittenText = null;
+            TxtRewritten.Text = LocalizationManager.Get(key, _settings.TargetLanguage);
+        }
+
+        private void SetRewrittenResult(string text, bool isError)
+        {
+            _rewrittenPlaceholderKey = null;
+            _rewrittenText = (isError || string.IsNullOrEmpty(text)) ? null : text;
+            TxtRewritten.Text = text;
+        }
+
+        private void SetRewriteTranslatedPlaceholder(string key)
+        {
+            _rewriteTranslatedPlaceholderKey = key;
+            _rewriteTranslatedText = null;
+            TxtRewriteTranslated.Text = LocalizationManager.Get(key, _settings.TargetLanguage);
+        }
+
+        private void SetRewriteTranslatedResult(string text, bool isError)
+        {
+            _rewriteTranslatedPlaceholderKey = null;
+            _rewriteTranslatedText = (isError || string.IsNullOrEmpty(text)) ? null : text;
+            TxtRewriteTranslated.Text = text;
+        }
+
+        // ---------------------------------------------------------------------------------
 
         private void FloatingPopup_PreviewKeyDown(object sender, KeyEventArgs e)
         {
@@ -85,24 +213,23 @@ namespace AITranslator
                 e.Handled = true; // Prevent Enter from inserting newline
                 _originalText = TxtOriginal.Text;
 
-                string lang = _settings.TargetLanguage;
                 if (_currentMode == PopupMode.TranslateAndRewrite)
                 {
-                    TxtTranslated.Text = LocalizationManager.Get("Translating", lang);
-                    TxtRewritten.Text = LocalizationManager.Get("RewritingTranslation", lang);
+                    SetTranslatedPlaceholder("Translating");
+                    SetRewrittenPlaceholder("RewritingTranslation");
                 }
                 else if (_currentMode == PopupMode.RewriteAndTranslate)
                 {
-                    TxtRewritten.Text = LocalizationManager.Get("Rewriting", lang);
-                    TxtRewriteTranslated.Text = LocalizationManager.Get("Translating", lang);
+                    SetRewrittenPlaceholder("Rewriting");
+                    SetRewriteTranslatedPlaceholder("Translating");
                 }
                 else if (_currentMode == PopupMode.Rewrite)
                 {
-                    TxtRewritten.Text = LocalizationManager.Get("Rewriting", lang);
+                    SetRewrittenPlaceholder("Rewriting");
                 }
                 else
                 {
-                    TxtTranslated.Text = LocalizationManager.Get("Translating", lang);
+                    SetTranslatedPlaceholder("Translating");
                 }
 
                 SetStatusColor(Brushes.Gold);
@@ -138,7 +265,7 @@ namespace AITranslator
             string lang = _settings.TargetLanguage;
             string toneName = LocalizationManager.Get("Tone" + _currentTone, lang);
             string modeText = (_currentMode == PopupMode.Rewrite || _currentMode == PopupMode.RewriteAndTranslate)
-                ? string.Format(LocalizationManager.Get("StatusModeRewrite", lang), toneName) 
+                ? string.Format(LocalizationManager.Get("StatusModeRewrite", lang), toneName)
                 : LocalizationManager.Get("StatusModeTranslate", lang);
             LblStatus.Text = $"{_settings.SelectedProvider} ({GetActiveModelName()}) - {modeText}";
         }
@@ -146,28 +273,25 @@ namespace AITranslator
         private void LocalizeUI()
         {
             string lang = _settings.TargetLanguage;
-            
+
             // TextBlocks
             if (LblQuickTranslate != null) LblQuickTranslate.Text = LocalizationManager.Get("QuickTranslate", lang);
             if (LblTranslateTo != null) LblTranslateTo.Text = LocalizationManager.Get("TranslateTo", lang);
             if (LblRewrite != null) LblRewrite.Text = LocalizationManager.Get("Rewrite", lang);
 
-            // Dynamic loading and placeholder messages
-            if (TxtTranslated != null)
+            // Re-render any placeholder currently displayed in the output boxes using
+            // the tracked localization keys (robust against language switches).
+            if (_translatedPlaceholderKey != null && TxtTranslated != null)
             {
-                string text = TxtTranslated.Text;
-                if (text == "Đang dịch bằng AI..." || text == "Translating with AI..." || text == "AIで翻訳中..." || text == "AI로 번역 중..." || text == "AI翻译中...")
-                {
-                    TxtTranslated.Text = LocalizationManager.Get("Translating", lang);
-                }
-                else if (text == "Đang viết lại câu bằng AI..." || text == "Rewriting with AI..." || text == "AIで書き換え中..." || text == "AI로 다시 쓰는 중..." || text == "AI重写中...")
-                {
-                    TxtTranslated.Text = LocalizationManager.Get("Rewriting", lang);
-                }
-                else if (text == "Vui lòng bôi đen văn bản cần dịch." || text == "Please select text to translate." || text == "翻訳するテキストを選択してください。" || text == "번역할 텍스트를 선택하십시오." || text == "请选择要翻译的文本。")
-                {
-                    TxtTranslated.Text = LocalizationManager.Get("ErrorEmptyText", lang);
-                }
+                TxtTranslated.Text = LocalizationManager.Get(_translatedPlaceholderKey, lang);
+            }
+            if (_rewrittenPlaceholderKey != null && TxtRewritten != null)
+            {
+                TxtRewritten.Text = LocalizationManager.Get(_rewrittenPlaceholderKey, lang);
+            }
+            if (_rewriteTranslatedPlaceholderKey != null && TxtRewriteTranslated != null)
+            {
+                TxtRewriteTranslated.Text = LocalizationManager.Get(_rewriteTranslatedPlaceholderKey, lang);
             }
 
             // Buttons
@@ -194,29 +318,6 @@ namespace AITranslator
                 LblRewriteTranslatedHeader.Text = string.Format(LocalizationManager.Get("RewriteTranslatedHeader", lang), rewriteTargetLangName);
             }
 
-            // Localize placeholders
-            if (TxtRewritten != null)
-            {
-                string text = TxtRewritten.Text;
-                if (text == "Đang viết lại câu dịch bằng AI..." || text == "Rewriting translation with AI..." || text == "AIで翻訳を書き換え中..." || text == "AI로 번역본을 다시 쓰는 중..." || text == "AI正在重写翻译...")
-                {
-                    TxtRewritten.Text = LocalizationManager.Get("RewritingTranslation", lang);
-                }
-                else if (text == "Đang viết lại câu bằng AI..." || text == "Rewriting with AI..." || text == "AIで書き換え中..." || text == "AI로 다시 쓰는 중..." || text == "AI重写中...")
-                {
-                    TxtRewritten.Text = LocalizationManager.Get("Rewriting", lang);
-                }
-            }
-
-            if (TxtRewriteTranslated != null)
-            {
-                string text = TxtRewriteTranslated.Text;
-                if (text == "Đang dịch..." || text == "Translating with AI..." || text == "AIで翻訳中..." || text == "AI로 번역 중..." || text == "AI翻译中...")
-                {
-                    TxtRewriteTranslated.Text = LocalizationManager.Get("Translating", lang);
-                }
-            }
-
             // Rewrite Tone Buttons
             if (BtnToneFluent != null) BtnToneFluent.Content = LocalizationManager.Get("ToneFluent", lang);
             if (BtnToneFormal != null) BtnToneFormal.Content = LocalizationManager.Get("ToneFormal", lang);
@@ -228,12 +329,6 @@ namespace AITranslator
         private void SetStatusColor(Brush brush)
         {
             StatusDot.Fill = brush;
-        }
-
-        private async void Window_Loaded(object sender, RoutedEventArgs e)
-        {
-            PositionPopupNearCursor();
-            await PerformTranslationAsync();
         }
 
         private void PositionPopupNearCursor()
@@ -252,7 +347,7 @@ namespace AITranslator
             // Get DPI settings to convert screen coordinates to WPF logical units
             double dpiX = 1.0;
             double dpiY = 1.0;
-            
+
             PresentationSource source = PresentationSource.FromVisual(this);
             if (source?.CompositionTarget != null)
             {
@@ -268,12 +363,13 @@ namespace AITranslator
             double popupLeft = logicalX + 12;
             double popupTop = logicalY + 12;
 
-            // Ensure window stays within work area boundaries
-            // Note: VirtualScreen contains all monitors
-            double workWidth = SystemParameters.WorkArea.Width;
-            double workHeight = SystemParameters.WorkArea.Height;
-            double workLeft = SystemParameters.WorkArea.Left;
-            double workTop = SystemParameters.WorkArea.Top;
+            // Bound the popup to the work area of the monitor the cursor is on.
+            // (SystemParameters.WorkArea only describes the PRIMARY monitor.)
+            var workArea = System.Windows.Forms.Screen.FromPoint(mouse).WorkingArea;
+            double workLeft = workArea.Left / dpiX;
+            double workTop = workArea.Top / dpiY;
+            double workWidth = workArea.Width / dpiX;
+            double workHeight = workArea.Height / dpiY;
 
             // We must set Left/Top first to trigger layout so Width/Height are calculated (due to SizeToContent)
             this.Left = popupLeft;
@@ -307,33 +403,39 @@ namespace AITranslator
 
         private async Task PerformTranslationAsync()
         {
+            // Supersede any in-flight request.
+            _cts?.Cancel();
+            _cts?.Dispose();
+            _cts = new CancellationTokenSource();
+            var ct = _cts.Token;
+
             BtnRetry.Visibility = Visibility.Collapsed;
 
             try
             {
-                string lang = _settings.TargetLanguage;
                 if (_currentMode == PopupMode.TranslateAndRewrite)
                 {
                     // 1. Translate original text (Sentence 1) to target language -> TxtTranslated (Sentence 2)
-                    var translateRes = await _aiService.TranslateAsync(_originalText, _settings);
+                    var translateRes = await _aiService.TranslateAsync(_originalText, _settings, ct);
+                    if (ct.IsCancellationRequested) return;
                     SyncTargetLanguageFromResult(translateRes);
-                    string translateResult = translateRes.Text;
-                    TxtTranslated.Text = translateResult;
+                    SetTranslatedResult(translateRes.Text, translateRes.IsError);
 
-                    if (translateResult.StartsWith("Lỗi") || translateResult.Contains("System error"))
+                    if (translateRes.IsError)
                     {
                         SetStatusColor(Brushes.Red);
                         BtnRetry.Visibility = Visibility.Visible;
-                        TxtRewritten.Text = translateResult;
+                        SetRewrittenResult(translateRes.Text, isError: true);
                         return;
                     }
 
                     // 2. Rewrite translated text (Sentence 2) to TxtRewritten (Sentence 3)
-                    TxtRewritten.Text = LocalizationManager.Get("RewritingTranslation", lang);
-                    string rewriteResult = await _aiService.RewriteAsync(translateResult, _currentTone, _settings);
-                    TxtRewritten.Text = rewriteResult;
+                    SetRewrittenPlaceholder("RewritingTranslation");
+                    var rewriteRes = await _aiService.RewriteAsync(translateRes.Text, _currentTone, _settings, ct);
+                    if (ct.IsCancellationRequested) return;
+                    SetRewrittenResult(rewriteRes.Text, rewriteRes.IsError);
 
-                    if (rewriteResult.StartsWith("Lỗi") || rewriteResult.Contains("System error"))
+                    if (rewriteRes.IsError)
                     {
                         SetStatusColor(Brushes.Red);
                         BtnRetry.Visibility = Visibility.Visible;
@@ -346,10 +448,11 @@ namespace AITranslator
                 }
                 else if (_currentMode == PopupMode.Rewrite)
                 {
-                    string result = await _aiService.RewriteAsync(_originalText, _currentTone, _settings);
-                    TxtRewritten.Text = result;
+                    var rewriteRes = await _aiService.RewriteAsync(_originalText, _currentTone, _settings, ct);
+                    if (ct.IsCancellationRequested) return;
+                    SetRewrittenResult(rewriteRes.Text, rewriteRes.IsError);
 
-                    if (result.StartsWith("Lỗi") || result.Contains("System error"))
+                    if (rewriteRes.IsError)
                     {
                         SetStatusColor(Brushes.Red);
                         BtnRetry.Visibility = Visibility.Visible;
@@ -362,43 +465,44 @@ namespace AITranslator
                 }
                 else if (_currentMode == PopupMode.RewriteAndTranslate)
                 {
-                    // 1. Rewrite original text (Sentence 1) to TxtRewritten (Sentence 3)
-                    string rewrittenText = TxtRewritten.Text;
-                    if (string.IsNullOrEmpty(rewrittenText) || 
-                        rewrittenText == LocalizationManager.Get("Rewriting", lang) ||
-                        rewrittenText.StartsWith("Lỗi") || rewrittenText.Contains("System error"))
+                    // 1. Rewrite original text (Sentence 1) to TxtRewritten (Sentence 3),
+                    //    unless a successful rewrite is already displayed.
+                    string? rewrittenText = _rewrittenText;
+                    if (rewrittenText == null)
                     {
-                        TxtRewritten.Text = LocalizationManager.Get("Rewriting", lang);
-                        rewrittenText = await _aiService.RewriteAsync(_originalText, _currentTone, _settings);
-                        TxtRewritten.Text = rewrittenText;
-                    }
+                        SetRewrittenPlaceholder("Rewriting");
+                        var rewriteRes = await _aiService.RewriteAsync(_originalText, _currentTone, _settings, ct);
+                        if (ct.IsCancellationRequested) return;
+                        SetRewrittenResult(rewriteRes.Text, rewriteRes.IsError);
 
-                    if (rewrittenText.StartsWith("Lỗi") || rewrittenText.Contains("System error"))
-                    {
-                        SetStatusColor(Brushes.Red);
-                        BtnRetry.Visibility = Visibility.Visible;
-                        TxtRewriteTranslated.Text = rewrittenText;
-                        return;
+                        if (rewriteRes.IsError)
+                        {
+                            SetStatusColor(Brushes.Red);
+                            BtnRetry.Visibility = Visibility.Visible;
+                            SetRewriteTranslatedResult(rewriteRes.Text, isError: true);
+                            return;
+                        }
+                        rewrittenText = rewriteRes.Text;
                     }
 
                     // 2. Translate rewritten text (Sentence 3) to TxtRewriteTranslated (Sentence 4)
-                    TxtRewriteTranslated.Text = LocalizationManager.Get("Translating", lang);
+                    SetRewriteTranslatedPlaceholder("Translating");
                     string originalTargetLang = _settings.TargetLanguage;
                     TranslationResult translateRes;
                     try
                     {
                         _settings.TargetLanguage = _rewriteTargetLanguage;
-                        translateRes = await _aiService.TranslateAsync(rewrittenText, _settings);
+                        translateRes = await _aiService.TranslateAsync(rewrittenText, _settings, ct);
                     }
                     finally
                     {
                         _settings.TargetLanguage = originalTargetLang;
                     }
+                    if (ct.IsCancellationRequested) return;
                     SyncRewriteTargetLanguageFromResult(translateRes);
-                    string translateResult = translateRes.Text;
-                    TxtRewriteTranslated.Text = translateResult;
+                    SetRewriteTranslatedResult(translateRes.Text, translateRes.IsError);
 
-                    if (translateResult.StartsWith("Lỗi") || translateResult.Contains("System error"))
+                    if (translateRes.IsError)
                     {
                         SetStatusColor(Brushes.Red);
                         BtnRetry.Visibility = Visibility.Visible;
@@ -411,12 +515,12 @@ namespace AITranslator
                 }
                 else // Translate Mode
                 {
-                    var translateRes = await _aiService.TranslateAsync(_originalText, _settings);
+                    var translateRes = await _aiService.TranslateAsync(_originalText, _settings, ct);
+                    if (ct.IsCancellationRequested) return;
                     SyncTargetLanguageFromResult(translateRes);
-                    string result = translateRes.Text;
-                    TxtTranslated.Text = result;
+                    SetTranslatedResult(translateRes.Text, translateRes.IsError);
 
-                    if (result.StartsWith("Lỗi") || result.Contains("System error"))
+                    if (translateRes.IsError)
                     {
                         SetStatusColor(Brushes.Red);
                         BtnRetry.Visibility = Visibility.Visible;
@@ -428,36 +532,38 @@ namespace AITranslator
                     }
                 }
             }
+            catch (OperationCanceledException)
+            {
+                // Superseded or popup hidden — nothing to render.
+                return;
+            }
             catch (Exception ex)
             {
                 string lang = _settings.TargetLanguage;
-                string opName = (_currentMode == PopupMode.Rewrite || _currentMode == PopupMode.RewriteAndTranslate) 
-                    ? LocalizationManager.Get("StatusModeRewrite", lang).Replace(" ({0})", "") 
+                string opName = (_currentMode == PopupMode.Rewrite || _currentMode == PopupMode.RewriteAndTranslate)
+                    ? LocalizationManager.Get("StatusModeRewrite", lang).Replace(" ({0})", "")
                     : LocalizationManager.Get("StatusModeTranslate", lang);
                 string format = LocalizationManager.Get("ErrorSystem", lang);
-                
+
                 string errorText = string.Format(format, opName, ex.Message);
                 if (_currentMode == PopupMode.Rewrite)
                 {
-                    TxtRewritten.Text = errorText;
+                    SetRewrittenResult(errorText, isError: true);
                 }
                 else if (_currentMode == PopupMode.RewriteAndTranslate)
                 {
-                    string rewrittenText = TxtRewritten.Text;
-                    if (string.IsNullOrEmpty(rewrittenText) || 
-                        rewrittenText == LocalizationManager.Get("Rewriting", lang) ||
-                        rewrittenText.StartsWith("Lỗi") || rewrittenText.Contains("System error"))
+                    if (_rewrittenText == null)
                     {
-                        TxtRewritten.Text = errorText;
+                        SetRewrittenResult(errorText, isError: true);
                     }
-                    TxtRewriteTranslated.Text = errorText;
+                    SetRewriteTranslatedResult(errorText, isError: true);
                 }
                 else
                 {
-                    TxtTranslated.Text = errorText;
+                    SetTranslatedResult(errorText, isError: true);
                     if (_currentMode == PopupMode.TranslateAndRewrite)
                     {
-                        TxtRewritten.Text = errorText;
+                        SetRewrittenResult(errorText, isError: true);
                     }
                 }
                 SetStatusColor(Brushes.Red);
@@ -465,9 +571,12 @@ namespace AITranslator
             }
             finally
             {
-                UpdateVisibilityForMode();
-                this.UpdateLayout();
-                PositionPopupNearCursor();
+                if (!ct.IsCancellationRequested)
+                {
+                    UpdateVisibilityForMode();
+                    this.UpdateLayout();
+                    PositionPopupNearCursor();
+                }
             }
         }
 
@@ -492,13 +601,7 @@ namespace AITranslator
                 BorderRewritten.Visibility = Visibility.Visible;
 
                 // Show rewrite translate pills (Row 6) once rewrite is successful
-                string text = TxtRewritten.Text;
-                string lang = _settings.TargetLanguage;
-                bool isSuccess = !string.IsNullOrEmpty(text) &&
-                                  text != LocalizationManager.Get("Rewriting", lang) &&
-                                  !text.StartsWith("Lỗi") && 
-                                  !text.Contains("System error");
-                GridRewriteTranslateSelection.Visibility = isSuccess ? Visibility.Visible : Visibility.Collapsed;
+                GridRewriteTranslateSelection.Visibility = _rewrittenText != null ? Visibility.Visible : Visibility.Collapsed;
                 BorderRewriteTranslated.Visibility = Visibility.Collapsed;
             }
             else if (_currentMode == PopupMode.RewriteAndTranslate)
@@ -514,14 +617,9 @@ namespace AITranslator
             {
                 GridTranslateSelection.Visibility = Visibility.Visible;
                 BorderTranslated.Visibility = Visibility.Visible;
-                
-                string lang = _settings.TargetLanguage;
-                string text = TxtTranslated.Text;
-                bool isSuccess = !string.IsNullOrEmpty(text) &&
-                                  text != LocalizationManager.Get("Translating", lang) &&
-                                  !text.StartsWith("Lỗi") && 
-                                  !text.Contains("System error");
-                GridRewriteSelection.Visibility = isSuccess ? Visibility.Visible : Visibility.Collapsed;
+
+                // Show rewrite pills once the translation is successful
+                GridRewriteSelection.Visibility = _translatedText != null ? Visibility.Visible : Visibility.Collapsed;
                 BorderRewritten.Visibility = Visibility.Collapsed;
                 GridRewriteTranslateSelection.Visibility = Visibility.Collapsed;
                 BorderRewriteTranslated.Visibility = Visibility.Collapsed;
@@ -530,30 +628,26 @@ namespace AITranslator
 
         private async void BtnRetry_Click(object sender, RoutedEventArgs e)
         {
-            string lang = _settings.TargetLanguage;
             if (_currentMode == PopupMode.TranslateAndRewrite)
             {
-                TxtTranslated.Text = LocalizationManager.Get("Translating", lang);
-                TxtRewritten.Text = LocalizationManager.Get("RewritingTranslation", lang);
+                SetTranslatedPlaceholder("Translating");
+                SetRewrittenPlaceholder("RewritingTranslation");
             }
             else if (_currentMode == PopupMode.RewriteAndTranslate)
             {
-                string rewrittenText = TxtRewritten.Text;
-                if (string.IsNullOrEmpty(rewrittenText) || 
-                    rewrittenText == LocalizationManager.Get("Rewriting", lang) ||
-                    rewrittenText.StartsWith("Lỗi") || rewrittenText.Contains("System error"))
+                if (_rewrittenText == null)
                 {
-                    TxtRewritten.Text = LocalizationManager.Get("Rewriting", lang);
+                    SetRewrittenPlaceholder("Rewriting");
                 }
-                TxtRewriteTranslated.Text = LocalizationManager.Get("Translating", lang);
+                SetRewriteTranslatedPlaceholder("Translating");
             }
             else if (_currentMode == PopupMode.Rewrite)
             {
-                TxtRewritten.Text = LocalizationManager.Get("Rewriting", lang);
+                SetRewrittenPlaceholder("Rewriting");
             }
             else
             {
-                TxtTranslated.Text = LocalizationManager.Get("Translating", lang);
+                SetTranslatedPlaceholder("Translating");
             }
             SetStatusColor(Brushes.Gold);
             await PerformTranslationAsync();
@@ -566,42 +660,34 @@ namespace AITranslator
 
         private void BtnCopyTranslated_Click(object sender, RoutedEventArgs e)
         {
-            CopyTextHelper(TxtTranslated.Text, sender as Button);
+            CopyTextHelper(_translatedText, sender as Button);
         }
 
         private void BtnCopyRewritten_Click(object sender, RoutedEventArgs e)
         {
-            CopyTextHelper(TxtRewritten.Text, sender as Button);
+            CopyTextHelper(_rewrittenText, sender as Button);
         }
 
         private void BtnCopyRewriteTranslated_Click(object sender, RoutedEventArgs e)
         {
-            CopyTextHelper(TxtRewriteTranslated.Text, sender as Button);
+            CopyTextHelper(_rewriteTranslatedText, sender as Button);
         }
 
 
-        private void CopyTextHelper(string text, Button? btn)
+        private async void CopyTextHelper(string? text, Button? btn)
         {
+            // Only successful results are copyable (placeholders/errors pass null here).
+            if (string.IsNullOrEmpty(text)) return;
+
             try
             {
-                string lang = _settings.TargetLanguage;
-                if (!string.IsNullOrEmpty(text) && 
-                    text != LocalizationManager.Get("Translating", lang) && 
-                    text != LocalizationManager.Get("Rewriting", lang) && 
-                    text != LocalizationManager.Get("RewritingTranslation", lang) && 
-                    !text.StartsWith("Lỗi") && !text.Contains("System error"))
+                Clipboard.SetText(text);
+
+                if (btn != null)
                 {
-                    Clipboard.SetText(text);
-                    
-                    if (btn != null)
-                    {
-                        btn.Content = "✔️";
-                        
-                        Task.Delay(1000).ContinueWith(_ => 
-                        {
-                            Dispatcher.Invoke(() => btn.Content = "📋");
-                        });
-                    }
+                    btn.Content = "✔️";
+                    await Task.Delay(1000);
+                    btn.Content = "📋";
                 }
             }
             catch (Exception ex)
@@ -615,8 +701,10 @@ namespace AITranslator
 
         private void BtnSettings_Click(object sender, RoutedEventArgs e)
         {
-            SettingsRequested?.Invoke();
+            // Hide first: SettingsRequested opens a modal dialog, so anything after
+            // the Invoke would only run once that dialog closes.
             CloseWithFade();
+            SettingsRequested?.Invoke();
         }
 
         private void BtnClose_Click(object sender, RoutedEventArgs e)
@@ -629,6 +717,9 @@ namespace AITranslator
             if (_isClosing) return;
             _isClosing = true;
 
+            // Stop the in-flight request; its result would be discarded anyway.
+            _cts?.Cancel();
+
             // Fade out animation
             var fadeOut = new DoubleAnimation
             {
@@ -636,9 +727,26 @@ namespace AITranslator
                 To = 0.0,
                 Duration = new Duration(TimeSpan.FromSeconds(0.12))
             };
-            
-            fadeOut.Completed += (s, e) => this.Close();
+
+            fadeOut.Completed += (s, e) =>
+            {
+                // The window is reused across triggers, so hide instead of close.
+                // Skip if a new Present() reset the state while the fade was running.
+                if (!_isClosing || !IsLoaded) return;
+                Hide();
+                BeginAnimation(OpacityProperty, null);
+                Opacity = 1.0;
+                _isClosing = false;
+            };
             this.BeginAnimation(OpacityProperty, fadeOut);
+        }
+
+        protected override void OnClosed(EventArgs e)
+        {
+            _cts?.Cancel();
+            _cts?.Dispose();
+            _cts = null;
+            base.OnClosed(e);
         }
 
         private async void BtnLangPill_Click(object sender, RoutedEventArgs e)
@@ -648,12 +756,9 @@ namespace AITranslator
                 // If we are in Rewrite or RewriteAndTranslate mode, switch to Translate mode
                 if (_currentMode == PopupMode.Rewrite || _currentMode == PopupMode.RewriteAndTranslate)
                 {
-                    string rewrittenText = TxtRewritten.Text;
-                    if (!string.IsNullOrEmpty(rewrittenText) && 
-                        rewrittenText != LocalizationManager.Get("Rewriting", _settings.TargetLanguage) && 
-                        !rewrittenText.StartsWith("Lỗi") && !rewrittenText.Contains("System error"))
+                    if (_rewrittenText != null)
                     {
-                        _originalText = rewrittenText;
+                        _originalText = _rewrittenText;
                         TxtOriginal.Text = _originalText;
                     }
                     _currentMode = PopupMode.Translate;
@@ -667,6 +772,13 @@ namespace AITranslator
                 _settings.TargetLanguage = lang;
                 _settings.Save();
 
+                // Clear previous translated text and set loading indicator
+                SetTranslatedPlaceholder("Translating");
+                if (_currentMode == PopupMode.TranslateAndRewrite)
+                {
+                    SetRewrittenPlaceholder("RewritingTranslation");
+                }
+
                 // Localize UI to the newly selected target language
                 LocalizeUI();
 
@@ -674,12 +786,6 @@ namespace AITranslator
                 UpdatePillHighlights();
                 UpdateStatusLabel();
 
-                // Clear previous translated text and set loading indicator
-                TxtTranslated.Text = LocalizationManager.Get("Translating", lang);
-                if (_currentMode == PopupMode.TranslateAndRewrite)
-                {
-                    TxtRewritten.Text = LocalizationManager.Get("RewritingTranslation", lang);
-                }
                 SetStatusColor(Brushes.Gold);
 
                 // Run translation
@@ -710,16 +816,16 @@ namespace AITranslator
                 // Clear previous text and set loading indicator
                 if (_currentMode == PopupMode.TranslateAndRewrite)
                 {
-                    TxtRewritten.Text = LocalizationManager.Get("RewritingTranslation", _settings.TargetLanguage);
+                    SetRewrittenPlaceholder("RewritingTranslation");
                 }
                 else if (_currentMode == PopupMode.RewriteAndTranslate)
                 {
-                    TxtRewritten.Text = LocalizationManager.Get("Rewriting", _settings.TargetLanguage);
-                    TxtRewriteTranslated.Text = LocalizationManager.Get("Translating", _settings.TargetLanguage);
+                    SetRewrittenPlaceholder("Rewriting");
+                    SetRewriteTranslatedPlaceholder("Translating");
                 }
                 else
                 {
-                    TxtRewritten.Text = LocalizationManager.Get("Rewriting", _settings.TargetLanguage);
+                    SetRewrittenPlaceholder("Rewriting");
                 }
                 SetStatusColor(Brushes.Gold);
 
@@ -749,7 +855,7 @@ namespace AITranslator
                 LocalizeUI();
 
                 // Clear previous translated text and set loading indicator
-                TxtRewriteTranslated.Text = LocalizationManager.Get("Translating", _settings.TargetLanguage);
+                SetRewriteTranslatedPlaceholder("Translating");
                 SetStatusColor(Brushes.Gold);
 
                 // Run translation
@@ -768,21 +874,13 @@ namespace AITranslator
 
         private void HighlightActiveLanguagePill()
         {
-            // Define inactive colors (Matching the resources defined in XAML)
-            var inactiveBg = (Brush)new BrushConverter().ConvertFromString("#1E1E2C")!;
-            var inactiveFg = (Brush)new BrushConverter().ConvertFromString("#64748B")!;
-
-            // Define active colors (Premium Accent Blue)
-            var activeBg = (Brush)new BrushConverter().ConvertFromString("#3B82F6")!;
-            var activeFg = Brushes.White;
-
             // Reset all pills
             var pills = new[] { BtnLangVi, BtnLangEn, BtnLangJa, BtnLangKo, BtnLangZh };
             foreach (var pill in pills)
             {
                 if (pill == null) continue;
-                pill.Background = inactiveBg;
-                pill.Foreground = inactiveFg;
+                pill.Background = PillInactiveBg;
+                pill.Foreground = PillInactiveFg;
             }
 
             // Highlight language pill if in Translate or TranslateAndRewrite mode
@@ -801,29 +899,21 @@ namespace AITranslator
 
                 if (activePill != null)
                 {
-                    activePill.Background = activeBg;
-                    activePill.Foreground = activeFg;
+                    activePill.Background = PillActiveBg;
+                    activePill.Foreground = PillActiveFg;
                 }
             }
         }
 
         private void HighlightActiveTonePill()
         {
-            // Define inactive colors
-            var inactiveBg = (Brush)new BrushConverter().ConvertFromString("#1E1E2C")!;
-            var inactiveFg = (Brush)new BrushConverter().ConvertFromString("#64748B")!;
-
-            // Define active colors (Premium Accent Blue)
-            var activeBg = (Brush)new BrushConverter().ConvertFromString("#3B82F6")!;
-            var activeFg = Brushes.White;
-
             // Reset all pills
             var pills = new[] { BtnToneFluent, BtnToneFormal, BtnToneCasual, BtnToneConcise };
             foreach (var pill in pills)
             {
                 if (pill == null) continue;
-                pill.Background = inactiveBg;
-                pill.Foreground = inactiveFg;
+                pill.Background = PillInactiveBg;
+                pill.Foreground = PillInactiveFg;
             }
 
             // Highlight tone pill if in Rewrite or TranslateAndRewrite mode
@@ -840,29 +930,21 @@ namespace AITranslator
 
                 if (activePill != null)
                 {
-                    activePill.Background = activeBg;
-                    activePill.Foreground = activeFg;
+                    activePill.Background = PillActiveBg;
+                    activePill.Foreground = PillActiveFg;
                 }
             }
         }
 
         private void HighlightActiveRewriteLanguagePill()
         {
-            // Define inactive colors (Matching the resources defined in XAML)
-            var inactiveBg = (Brush)new BrushConverter().ConvertFromString("#1E1E2C")!;
-            var inactiveFg = (Brush)new BrushConverter().ConvertFromString("#64748B")!;
-
-            // Define active colors (Premium Accent Blue)
-            var activeBg = (Brush)new BrushConverter().ConvertFromString("#3B82F6")!;
-            var activeFg = Brushes.White;
-
             // Reset all pills
             var pills = new[] { BtnRewriteLangVi, BtnRewriteLangEn, BtnRewriteLangJa, BtnRewriteLangKo, BtnRewriteLangZh };
             foreach (var pill in pills)
             {
                 if (pill == null) continue;
-                pill.Background = inactiveBg;
-                pill.Foreground = inactiveFg;
+                pill.Background = PillInactiveBg;
+                pill.Foreground = PillInactiveFg;
             }
 
             // Highlight language pill if in RewriteAndTranslate mode
@@ -881,8 +963,8 @@ namespace AITranslator
 
                 if (activePill != null)
                 {
-                    activePill.Background = activeBg;
-                    activePill.Foreground = activeFg;
+                    activePill.Background = PillActiveBg;
+                    activePill.Foreground = PillActiveFg;
                 }
             }
         }

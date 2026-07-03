@@ -6,6 +6,7 @@ using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace AITranslator
@@ -15,11 +16,23 @@ namespace AITranslator
         public string Text { get; set; } = "";
         public string DetectedSourceLang { get; set; } = "";
         public string ActualTargetLang { get; set; } = "";
+
+        // True when Text is an error/prompt message rather than translated content.
+        // The UI relies on this flag instead of pattern-matching the display text.
+        public bool IsError { get; set; }
     }
 
     public class AIService
     {
-        private static readonly HttpClient client = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
+        // PooledConnectionLifetime forces periodic reconnects so a tray app that runs
+        // for days keeps picking up DNS changes instead of pinning stale endpoints.
+        private static readonly HttpClient client = new HttpClient(new SocketsHttpHandler
+        {
+            PooledConnectionLifetime = TimeSpan.FromMinutes(10)
+        })
+        {
+            Timeout = TimeSpan.FromSeconds(15)
+        };
 
         // Caches successful translations AND rewrites so re-triggering the same
         // selection (e.g. after the popup was accidentally dismissed, or switching
@@ -33,10 +46,10 @@ namespace AITranslator
         private static readonly ConcurrentQueue<string> _cacheKeyOrder = new();
         private const int MaxCacheEntries = 300;
 
-        public async Task<TranslationResult> TranslateAsync(string text, AppSettings settings)
+        public async Task<TranslationResult> TranslateAsync(string text, AppSettings settings, CancellationToken ct = default)
         {
             if (string.IsNullOrWhiteSpace(text))
-                return new TranslationResult { Text = "Vui lòng bôi đen văn bản cần dịch." };
+                return new TranslationResult { Text = "Vui lòng bôi đen văn bản cần dịch.", IsError = true };
 
             string provider = settings.SelectedProvider;
             string targetLanguage = settings.TargetLanguage;
@@ -78,25 +91,33 @@ namespace AITranslator
             {
                 result = provider switch
                 {
-                    "Gemini" => await TranslateWithGeminiAsync(prompt, model, settings.GeminiApiKey),
-                    "OpenAI" => await TranslateWithOpenAIAsync(prompt, model, settings.OpenAIApiKey),
-                    "Claude" => await TranslateWithClaudeAsync(prompt, model, settings.ClaudeApiKey),
-                    "Groq" => await TranslateWithGroqAsync(prompt, model, settings.GroqApiKey),
+                    "Gemini" => await TranslateWithGeminiAsync(prompt, model, settings.GeminiApiKey, ct),
+                    "OpenAI" => await TranslateWithOpenAIAsync(prompt, model, settings.OpenAIApiKey, ct),
+                    "Claude" => await TranslateWithClaudeAsync(prompt, model, settings.ClaudeApiKey, ct),
+                    "Groq" => await TranslateWithGroqAsync(prompt, model, settings.GroqApiKey, ct),
                     _ => $"Lỗi: Nhà cung cấp AI '{provider}' không được hỗ trợ."
                 };
             }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw; // caller cancelled (popup closed / new request) — no error UI needed
+            }
             catch (Exception ex)
             {
-                return new TranslationResult { Text = $"Lỗi kết nối API ({provider}): {ex.Message}\n\nHãy kiểm tra lại API Key và kết nối mạng của bạn." };
+                return new TranslationResult { Text = $"Lỗi kết nối API ({provider}): {ex.Message}\n\nHãy kiểm tra lại API Key và kết nối mạng của bạn.", IsError = true };
             }
 
+            bool isError = result.StartsWith("Lỗi");
+
             // Only cache successful translations, never error messages.
-            if (!result.StartsWith("Lỗi"))
+            if (!isError)
             {
                 CacheTranslation(cacheKey, result);
             }
 
-            return ParseTranslationResult(result, targetLanguage, text);
+            var parsed = ParseTranslationResult(result, targetLanguage, text);
+            parsed.IsError = isError;
+            return parsed;
         }
 
         // Accepts the canonical names plus the casing/short-code/native variants that
@@ -223,10 +244,10 @@ namespace AITranslator
             return s;
         }
 
-        public async Task<string> RewriteAsync(string text, string tone, AppSettings settings)
+        public async Task<TranslationResult> RewriteAsync(string text, string tone, AppSettings settings, CancellationToken ct = default)
         {
             if (string.IsNullOrWhiteSpace(text))
-                return "Vui lòng bôi đen văn bản cần viết lại.";
+                return new TranslationResult { Text = "Vui lòng bôi đen văn bản cần viết lại.", IsError = true };
 
             string provider = settings.SelectedProvider;
             string model = provider switch
@@ -242,7 +263,7 @@ namespace AITranslator
             string cacheKey = $"Rewrite|{provider}|{model}|{tone}|{text}";
             if (_translationCache.TryGetValue(cacheKey, out string? cached))
             {
-                return cached;
+                return new TranslationResult { Text = cached };
             }
 
             // System prompt for high-quality rewriting based on tone
@@ -267,25 +288,31 @@ namespace AITranslator
             {
                 result = provider switch
                 {
-                    "Gemini" => await TranslateWithGeminiAsync(prompt, model, settings.GeminiApiKey),
-                    "OpenAI" => await TranslateWithOpenAIAsync(prompt, model, settings.OpenAIApiKey),
-                    "Claude" => await TranslateWithClaudeAsync(prompt, model, settings.ClaudeApiKey),
-                    "Groq" => await TranslateWithGroqAsync(prompt, model, settings.GroqApiKey),
+                    "Gemini" => await TranslateWithGeminiAsync(prompt, model, settings.GeminiApiKey, ct),
+                    "OpenAI" => await TranslateWithOpenAIAsync(prompt, model, settings.OpenAIApiKey, ct),
+                    "Claude" => await TranslateWithClaudeAsync(prompt, model, settings.ClaudeApiKey, ct),
+                    "Groq" => await TranslateWithGroqAsync(prompt, model, settings.GroqApiKey, ct),
                     _ => $"Lỗi: Nhà cung cấp AI '{provider}' không được hỗ trợ."
                 };
             }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw; // caller cancelled (popup closed / new request) — no error UI needed
+            }
             catch (Exception ex)
             {
-                return $"Lỗi kết nối API ({provider}): {ex.Message}\n\nHãy kiểm tra lại API Key và kết nối mạng của bạn.";
+                return new TranslationResult { Text = $"Lỗi kết nối API ({provider}): {ex.Message}\n\nHãy kiểm tra lại API Key và kết nối mạng của bạn.", IsError = true };
             }
 
+            bool isError = result.StartsWith("Lỗi");
+
             // Only cache successful rewrites, never error messages.
-            if (!result.StartsWith("Lỗi"))
+            if (!isError)
             {
                 CacheTranslation(cacheKey, result);
             }
 
-            return result;
+            return new TranslationResult { Text = result, IsError = isError };
         }
 
 
@@ -311,7 +338,7 @@ namespace AITranslator
             }
         }
 
-        private async Task<string> TranslateWithGeminiAsync(string prompt, string model, string apiKey)
+        private async Task<string> TranslateWithGeminiAsync(string prompt, string model, string apiKey, CancellationToken ct)
         {
             if (string.IsNullOrWhiteSpace(apiKey))
                 return "Lỗi: Vui lòng cấu hình Gemini API Key trong phần Cài đặt.";
@@ -332,9 +359,9 @@ namespace AITranslator
 
             string jsonString = JsonSerializer.Serialize(requestBody);
             using var content = new StringContent(jsonString, Encoding.UTF8, "application/json");
-            
-            using var response = await client.PostAsync(url, content);
-            string responseString = await response.Content.ReadAsStringAsync();
+
+            using var response = await client.PostAsync(url, content, ct);
+            string responseString = await response.Content.ReadAsStringAsync(ct);
 
             if (!response.IsSuccessStatusCode)
             {
@@ -356,21 +383,21 @@ namespace AITranslator
             return "Lỗi định dạng phản hồi từ Gemini API.";
         }
 
-        private Task<string> TranslateWithOpenAIAsync(string prompt, string model, string apiKey)
+        private Task<string> TranslateWithOpenAIAsync(string prompt, string model, string apiKey, CancellationToken ct)
         {
             return TranslateWithOpenAICompatibleAsync(
-                "https://api.openai.com/v1/chat/completions", prompt, model, apiKey, "OpenAI");
+                "https://api.openai.com/v1/chat/completions", prompt, model, apiKey, "OpenAI", ct);
         }
 
         // Groq exposes an OpenAI-compatible Chat Completions API, so it reuses the
         // exact same request/response handling, only the base URL and label differ.
-        private Task<string> TranslateWithGroqAsync(string prompt, string model, string apiKey)
+        private Task<string> TranslateWithGroqAsync(string prompt, string model, string apiKey, CancellationToken ct)
         {
             return TranslateWithOpenAICompatibleAsync(
-                "https://api.groq.com/openai/v1/chat/completions", prompt, model, apiKey, "Groq");
+                "https://api.groq.com/openai/v1/chat/completions", prompt, model, apiKey, "Groq", ct);
         }
 
-        private async Task<string> TranslateWithOpenAICompatibleAsync(string url, string prompt, string model, string apiKey, string providerLabel)
+        private async Task<string> TranslateWithOpenAICompatibleAsync(string url, string prompt, string model, string apiKey, string providerLabel, CancellationToken ct)
         {
             if (string.IsNullOrWhiteSpace(apiKey))
                 return $"Lỗi: Vui lòng cấu hình {providerLabel} API Key trong phần Cài đặt.";
@@ -391,8 +418,8 @@ namespace AITranslator
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
             request.Content = new StringContent(jsonString, Encoding.UTF8, "application/json");
 
-            using var response = await client.SendAsync(request);
-            string responseString = await response.Content.ReadAsStringAsync();
+            using var response = await client.SendAsync(request, ct);
+            string responseString = await response.Content.ReadAsStringAsync(ct);
 
             if (!response.IsSuccessStatusCode)
             {
@@ -412,7 +439,7 @@ namespace AITranslator
             return $"Lỗi định dạng phản hồi từ {providerLabel} API.";
         }
 
-        private async Task<string> TranslateWithClaudeAsync(string prompt, string model, string apiKey)
+        private async Task<string> TranslateWithClaudeAsync(string prompt, string model, string apiKey, CancellationToken ct)
         {
             if (string.IsNullOrWhiteSpace(apiKey))
                 return "Lỗi: Vui lòng cấu hình Claude API Key trong phần Cài đặt.";
@@ -437,8 +464,8 @@ namespace AITranslator
             request.Headers.Add("anthropic-version", "2023-06-01");
             request.Content = new StringContent(jsonString, Encoding.UTF8, "application/json");
 
-            using var response = await client.SendAsync(request);
-            string responseString = await response.Content.ReadAsStringAsync();
+            using var response = await client.SendAsync(request, ct);
+            string responseString = await response.Content.ReadAsStringAsync(ct);
 
             if (!response.IsSuccessStatusCode)
             {
@@ -464,18 +491,12 @@ namespace AITranslator
                 using var doc = JsonDocument.Parse(responseString);
                 var root = doc.RootElement;
                 
-                // Try parsing Gemini error
-                if (root.TryGetProperty("error", out var geminiError))
+                // All supported providers (Gemini, OpenAI, Claude, Groq) use the same
+                // { "error": { "message": ... } } shape.
+                if (root.TryGetProperty("error", out var error) &&
+                    error.TryGetProperty("message", out var msg))
                 {
-                    if (geminiError.TryGetProperty("message", out var msg))
-                        return $"Lỗi API: {msg.GetString()}";
-                }
-                
-                // Try parsing OpenAI error
-                if (root.TryGetProperty("error", out var openAiError))
-                {
-                    if (openAiError.TryGetProperty("message", out var msg))
-                        return $"Lỗi API: {msg.GetString()}";
+                    return $"Lỗi API: {msg.GetString()}";
                 }
             }
             catch

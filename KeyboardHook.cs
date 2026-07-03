@@ -100,8 +100,10 @@ namespace AITranslator
         public void Dispose()
         {
             UnregisterAll();
+            // Only remove our hook. The HwndSource belongs to the window (obtained via
+            // FromHwnd), so disposing it here would tear down the window's HWND.
             _hwndSource?.RemoveHook(HwndHook);
-            _hwndSource?.Dispose();
+            _hwndSource = null;
             GC.SuppressFinalize(this);
         }
     }
